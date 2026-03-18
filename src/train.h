@@ -110,10 +110,16 @@ struct Train final : public GroundVehicle<Train, VEH_TRAIN> {
 	TrackBits track{}; ///< On which track the train currently is.
 	TrainForceProceeding force_proceed{}; ///< How the train should behave when it encounters next obstacle.
 
+	/* Underground/metro fields. */
+	bool IsUnderground() const { return this->underground_depth != 0; }
+	int16_t underground_depth = 0;      ///< Current underground depth (0 = surface, negative = underground).
+	uint32_t underground_slice = 0;     ///< Current SliceID when underground.
+	uint32_t underground_tile_raw = 0;  ///< TileIndex.base() of current underground tile.
+
 	/** Create new Train object. @copydoc GroundVehicle::GroundVehicle */
 	Train(VehicleID index) : GroundVehicleBase(index) {}
 	/** We want to 'destruct' the right class. */
-	~Train() override { this->PreDestructor(); }
+	~Train() override;  /* Defined in train_cmd.cpp — also cleans up underground state. */
 
 	friend struct GroundVehicle<Train, VEH_TRAIN>; // GroundVehicle needs to use the acceleration functions defined at Train.
 

@@ -90,6 +90,8 @@
 #include "network/network_func.h"
 #include "framerate_type.h"
 #include "viewport_cmd.h"
+#include "multilayer/underground_view.h"
+#include "multilayer/underground_render.h"
 
 #include <forward_list>
 #include <stack>
@@ -1308,8 +1310,19 @@ static void ViewportAddLandscape()
 				_vd.last_foundation_child[0] = LAST_CHILD_NONE;
 				_vd.last_foundation_child[1] = LAST_CHILD_NONE;
 
-				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
-				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
+				if (IsUndergroundViewActive() && _cur_ti.tile != INVALID_TILE) {
+					/* Underground view: replace ALL tiles with underground rendering. */
+					DrawUndergroundTile(_cur_ti.tile);
+					if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
+				} else {
+					/* Normal surface drawing. */
+					_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
+					/* Draw portal overlay on surface (always visible). */
+					if (_cur_ti.tile != INVALID_TILE && HasPortalOnTile(_cur_ti.tile)) {
+						DrawPortalOverlay(_cur_ti.tile);
+					}
+					if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
+				}
 			}
 		}
 	}

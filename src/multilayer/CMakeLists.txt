@@ -1,0 +1,21 @@
+add_files(
+    legacy_import.cpp
+    legacy_import.h
+    multilayer_map.cpp
+    multilayer_map.h
+    multilayer_types.h
+    portal_registry.cpp
+    portal_registry.h
+    station_complex.cpp
+    station_complex.h
+    underground_cmd.cpp
+    underground_cmd.h
+    underground_gui.cpp
+    underground_gui.h
+    underground_render.cpp
+    underground_render.h
+    underground_train.cpp
+    underground_train.h
+    underground_view.cpp
+    underground_view.h
+)

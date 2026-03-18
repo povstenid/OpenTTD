@@ -27,6 +27,7 @@
 #include "core/random_func.hpp"
 #include "linkgraph/linkgraph.h"
 #include "linkgraph/linkgraphschedule.h"
+#include "multilayer/station_complex.h"
 
 #include "table/strings.h"
 
@@ -507,6 +508,19 @@ void Station::RecomputeCatchment(bool no_clear_nearby_lists)
 		/* This tile sub-loop doesn't need to test any tiles, they are simply added to the catchment set. */
 		TileArea ta2 = TileArea(tile, 1, 1).Expand(r);
 		for (TileIndex tile2 : ta2) this->catchment_tiles.SetTile(tile2);
+	}
+
+	/* Also include catchment from StationComplex ExitSurface tiles. */
+	auto sc_it = _station_complexes.find(this->index.base());
+	if (sc_it != _station_complexes.end()) {
+		for (const auto *exit_node : sc_it->second.GetExits()) {
+			if (!exit_node->ref.IsValid()) continue;
+			TileIndex exit_tile = exit_node->ref.tile;
+			/* ExitSurface tiles provide standard station catchment. */
+			uint r = CA_TRAIN; /* Use train catchment radius. */
+			TileArea ta2 = TileArea(exit_tile, 1, 1).Expand(r);
+			for (TileIndex tile2 : ta2) this->catchment_tiles.SetTile(tile2);
+		}
 	}
 
 	/* Search catchment tiles for towns and industries */

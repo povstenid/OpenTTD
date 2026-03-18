@@ -45,6 +45,10 @@
 #include "3rdparty/fmt/chrono.h"
 #include "company_cmd.h"
 #include "misc_cmd.h"
+#include "multilayer/underground_gui.h"
+#include "multilayer/underground_view.h"
+#include "multilayer/underground_cmd.h"
+#include "multilayer/multilayer_map.h"
 
 #if defined(WITH_ZLIB)
 #include "network/network_content.h"
@@ -2958,6 +2962,136 @@ static bool ConDumpInfo(std::span<std::string_view> argv)
 	return false;
 }
 
+/* === Underground / Metro console commands === */
+
+static bool ConUnderground([[maybe_unused]] std::span<std::string_view> argv)
+{
+	if (argv.size() == 1 || argv.empty()) {
+		IConsolePrint(CC_HELP, "Underground metro commands:");
+		IConsolePrint(CC_HELP, "  'underground toolbar' - Open underground construction toolbar");
+		IConsolePrint(CC_HELP, "  'underground view'    - Toggle underground view");
+		IConsolePrint(CC_HELP, "  'underground build <x> <y> [depth]' - Build underground rail at tile");
+		IConsolePrint(CC_HELP, "  'underground portal <x> <y> <dir> [depth]' - Build portal (dir: 0-3)");
+		IConsolePrint(CC_HELP, "  'underground info <x> <y>' - Show underground info for tile");
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "toolbar")) {
+		ShowUndergroundToolbar();
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "view")) {
+		ToggleUndergroundView();
+		MarkWholeScreenDirty();
+		IConsolePrint(CC_DEFAULT, "Underground view: {}", IsUndergroundViewActive() ? "ON" : "OFF");
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "build") && argv.size() >= 4) {
+		auto x = ParseInteger<uint>(argv[2], 0);
+		auto y = ParseInteger<uint>(argv[3], 0);
+		if (!x || !y) { IConsolePrint(CC_ERROR, "Invalid coordinates."); return true; }
+		int16_t depth = -1;
+		if (argv.size() >= 5) {
+			/* Parse negative depth from string. */
+			auto parsed = ParseInteger<int>(argv[4], 0);
+			if (parsed) depth = static_cast<int16_t>(*parsed);
+		}
+		TileIndex tile = TileXY(*x, *y);
+		IConsolePrint(CC_DEFAULT, "Building at ({},{}) depth={} company={}", *x, *y, depth, _current_company.base());
+		IConsolePrint(CC_DEFAULT, "ValidTile={} MapSize={}", tile.base() < Map::Size(), Map::Size());
+
+		/* Test phase first (without Execute flag). */
+		auto test_result = Command<Commands::BuildUndergroundRail>::Do({}, tile, RAILTYPE_RAIL, TRACK_X, depth);
+		IConsolePrint(test_result.Succeeded() ? CC_DEFAULT : CC_ERROR, "Test phase: {}", test_result.Succeeded() ? "OK" : "FAILED");
+
+		if (test_result.Succeeded()) {
+			/* Execute phase. */
+			auto result = Command<Commands::BuildUndergroundRail>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, RAILTYPE_RAIL, TRACK_X, depth);
+			if (result.Succeeded()) {
+				IConsolePrint(CC_DEFAULT, "Underground rail built! Cost: {}", result.GetCost());
+			} else {
+				IConsolePrint(CC_ERROR, "Execute phase failed!");
+			}
+		}
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "portal") && argv.size() >= 5) {
+		auto x = ParseInteger<uint>(argv[2], 0);
+		auto y = ParseInteger<uint>(argv[3], 0);
+		auto dir_parsed = ParseInteger<int>(argv[4], 0);
+		if (!x || !y || !dir_parsed) { IConsolePrint(CC_ERROR, "Invalid parameters."); return true; }
+		uint8_t dir_val = static_cast<uint8_t>(*dir_parsed);
+		if (dir_val > 3) { IConsolePrint(CC_ERROR, "Dir must be 0-3."); return true; }
+		int16_t depth = -1;
+		if (argv.size() >= 6) {
+			auto dp = ParseInteger<int>(argv[5], 0);
+			if (dp) depth = static_cast<int16_t>(*dp);
+		}
+		TileIndex tile = TileXY(*x, *y);
+		IConsolePrint(CC_DEFAULT, "Building portal at ({},{}) dir={} depth={}", *x, *y, dir_val, depth);
+		auto test = Command<Commands::BuildPortal>::Do({}, tile, RAILTYPE_RAIL, static_cast<DiagDirection>(dir_val), depth);
+		if (!test.Succeeded()) {
+			IConsolePrint(CC_ERROR, "Portal test phase failed.");
+			return true;
+		}
+		auto result = Command<Commands::BuildPortal>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, RAILTYPE_RAIL, static_cast<DiagDirection>(dir_val), depth);
+		IConsolePrint(result.Succeeded() ? CC_DEFAULT : CC_ERROR, result.Succeeded() ? "Portal built!" : "Portal execute failed.");
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "info") && argv.size() >= 4) {
+		auto x = ParseInteger<uint>(argv[2], 0);
+		auto y = ParseInteger<uint>(argv[3], 0);
+		if (!x || !y) { IConsolePrint(CC_ERROR, "Invalid coordinates."); return true; }
+		TileIndex tile = TileXY(*x, *y);
+		const TileColumn &col = _multilayer_map.GetColumn(tile);
+		IConsolePrint(CC_DEFAULT, "Tile ({}, {}): {} slices", *x, *y, col.Count());
+		for (SliceID sid : col.slices) {
+			const TileSlice &s = _multilayer_map.GetSlice(sid);
+			const char *kind_str = "?";
+			switch (s.kind) {
+				case SliceKind::Surface: kind_str = "Surface"; break;
+				case SliceKind::Track: kind_str = "Track"; break;
+				case SliceKind::Portal: kind_str = "Portal"; break;
+				case SliceKind::StationTile: kind_str = "Station"; break;
+				case SliceKind::Ramp: kind_str = "Ramp"; break;
+				case SliceKind::End: kind_str = "Free"; break;
+			}
+			IConsolePrint(CC_DEFAULT, "  [{}] {} z=[{},{}] owner={}", sid, kind_str, s.span.z_bot, s.span.z_top, s.owner);
+		}
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "depth") && argv.size() >= 3) {
+		auto d = ParseInteger<int>(argv[2], 0);
+		if (!d || *d >= 0 || *d < -10) { IConsolePrint(CC_ERROR, "Depth must be -1 to -10."); return true; }
+		SetUndergroundViewDepth(static_cast<int16_t>(*d));
+		MarkWholeScreenDirty();
+		IConsolePrint(CC_DEFAULT, "Underground view depth set to {}", *d);
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "station") && argv.size() >= 4) {
+		auto x = ParseInteger<uint>(argv[2], 0);
+		auto y = ParseInteger<uint>(argv[3], 0);
+		if (!x || !y) { IConsolePrint(CC_ERROR, "Invalid coordinates."); return true; }
+		int16_t depth = -1;
+		if (argv.size() >= 5) { auto d = ParseInteger<int>(argv[4], 0); if (d) depth = static_cast<int16_t>(*d); }
+		uint16_t station_id = 0;
+		if (argv.size() >= 6) { auto s = ParseInteger<uint16_t>(argv[5], 0); if (s) station_id = *s; }
+		TileIndex tile = TileXY(*x, *y);
+		auto result = Command<Commands::BuildUndergroundStation>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, RAILTYPE_RAIL, depth, station_id);
+		IConsolePrint(result.Succeeded() ? CC_DEFAULT : CC_ERROR, result.Succeeded() ? "Station platform built!" : "Failed.");
+		return true;
+	}
+
+	IConsolePrint(CC_ERROR, "Unknown underground subcommand. Try 'underground' for help.");
+	return true;
+}
+
 /** Console command registration. */
 void IConsoleStdLibRegister()
 {
@@ -3101,4 +3235,7 @@ void IConsoleStdLibRegister()
 	IConsole::CmdRegister("newgrf_profile",          ConNewGRFProfile,    ConHookNewGRFDeveloperTool);
 
 	IConsole::CmdRegister("dump_info",               ConDumpInfo);
+
+	/* Underground / Metro */
+	IConsole::CmdRegister("underground",             ConUnderground);
 }

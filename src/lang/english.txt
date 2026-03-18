@@ -382,7 +382,7 @@ STR_GOTO_ORDER_VIEW                                             :{BLACK}Orders
 STR_GOTO_ORDER_VIEW_TOOLTIP                                     :{BLACK}Open the order view
 
 # Tooltips for the main toolbar
-###length 31
+###length 32
 STR_TOOLBAR_TOOLTIP_PAUSE_GAME                                  :{BLACK}Pause game
 STR_TOOLBAR_TOOLTIP_FORWARD                                     :{BLACK}Fast forward the game
 STR_TOOLBAR_TOOLTIP_OPTIONS                                     :{BLACK}Options and settings
@@ -413,6 +413,7 @@ STR_TOOLBAR_TOOLTIP_LANDSCAPING                                 :{BLACK}Open lan
 STR_TOOLBAR_TOOLTIP_SHOW_SOUND_MUSIC_WINDOW                     :{BLACK}Open sound/music window
 STR_TOOLBAR_TOOLTIP_SHOW_LAST_MESSAGE_NEWS                      :{BLACK}Open last message/news report, messages history or delete all messages
 STR_TOOLBAR_TOOLTIP_LAND_BLOCK_INFORMATION                      :{BLACK}Open land information, screenshot menu, OpenTTD credits, or developer tools
+STR_TOOLBAR_TOOLTIP_UNDERGROUND_VIEW                            :{BLACK}Open underground construction toolbar
 STR_TOOLBAR_TOOLTIP_SWITCH_TOOLBAR                              :{BLACK}Switch toolbars
 
 # Extra tooltips for the scenario editor toolbar
@@ -5350,6 +5351,15 @@ STR_ERROR_ANOTHER_TUNNEL_IN_THE_WAY                             :another tunnel 
 STR_ERROR_TUNNEL_THROUGH_MAP_BORDER                             :tunnel would end out of the map
 STR_ERROR_UNABLE_TO_EXCAVATE_LAND                               :unable to excavate land for other end of tunnel
 STR_ERROR_TUNNEL_TOO_LONG                                       :tunnel too long
+
+# Underground / Metro
+STR_ERROR_CAN_T_BUILD_UNDERGROUND_RAIL                          :Can't build underground rail here...
+STR_ERROR_CAN_T_REMOVE_UNDERGROUND_RAIL                         :Can't remove underground rail here...
+STR_ERROR_CAN_T_BUILD_PORTAL                                    :Can't build portal here...
+STR_ERROR_UNDERGROUND_DEPTH_INVALID                             :invalid underground depth
+STR_ERROR_UNDERGROUND_ZSPAN_CONFLICT                            :another structure occupies this depth
+STR_ERROR_UNDERGROUND_RAIL_TYPE_MISMATCH                        :rail type mismatch at this depth
+STR_UNDERGROUND_TOOLBAR_CAPTION                                 :{WHITE}Underground Construction
 
 # Object related errors
 STR_ERROR_TOO_MANY_OBJECTS                                      :too many objects

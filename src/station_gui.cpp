@@ -40,6 +40,7 @@
 #include "table/strings.h"
 
 #include "dropdown_common_type.h"
+#include "multilayer/station_complex.h"
 
 #include "safeguards.h"
 
@@ -1493,7 +1494,18 @@ struct StationViewWindow : public Window {
 	{
 		if (widget == WID_SV_CAPTION) {
 			const Station *st = Station::Get(this->window_number);
-			return GetString(STR_STATION_VIEW_CAPTION, st->index, st->facilities);
+			std::string caption = GetString(STR_STATION_VIEW_CAPTION, st->index, st->facilities);
+
+			/* Append underground level info if this station has a StationComplex. */
+			auto sc_it = _station_complexes.find(st->index.base());
+			if (sc_it != _station_complexes.end() && !sc_it->second.nodes.empty()) {
+				const StationComplex &sc = sc_it->second;
+				int16_t deepest = sc.GetDeepestLevel();
+				size_t platforms = sc.GetPlatforms().size();
+				size_t exits = sc.GetExits().size();
+				caption += fmt::format(" [UG: {}P {}E z={}]", platforms, exits, deepest);
+			}
+			return caption;
 		}
 
 		return this->Window::GetWidgetString(widget, stringid);

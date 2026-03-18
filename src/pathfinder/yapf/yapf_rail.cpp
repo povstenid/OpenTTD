@@ -588,6 +588,9 @@ Track YapfTrainChooseTrack(const Train *v, TileIndex tile, DiagDirection enterdi
 
 bool YapfTrainCheckReverse(const Train *v)
 {
+	/* No reverse check for underground trains. */
+	if (v->IsUnderground()) return false;
+
 	const Train *last_veh = v->Last();
 
 	/* get trackdirs of both ends */
@@ -641,6 +644,9 @@ bool YapfTrainCheckReverse(const Train *v)
 
 FindDepotData YapfTrainFindNearestDepot(const Train *v, int max_penalty)
 {
+	/* No depot search for underground trains. */
+	if (v->IsUnderground()) return {};
+
 	const Train *last_veh = v->Last();
 
 	PBSTileInfo origin = FollowTrainReservation(v);

@@ -380,6 +380,13 @@ enum class Commands : uint8_t {
 	UpdateLeagueTableElementScore, ///< update the score of a league table element
 	RemoveLeagueTableElement, ///< remove a league table element
 
+	BuildUndergroundRail, ///< build underground rail track at a given depth
+	RemoveUndergroundRail, ///< remove underground rail track
+	BuildPortal, ///< build a portal entry/exit between surface and underground
+	BuildUndergroundStation, ///< build underground station platform
+	BuildExitSurface, ///< build surface exit for underground station
+	BuildRamp, ///< build underground ramp between depth levels
+
 	End, ///< @important Must ALWAYS be on the end of this list!! (period)
 };
 

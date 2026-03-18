@@ -62,6 +62,8 @@
 #include "core/string_consumer.hpp"
 
 #include "widgets/toolbar_widget.h"
+#include "multilayer/underground_view.h"
+#include "multilayer/underground_gui.h"
 
 #include "network/network.h"
 #include "network/network_gui.h"
@@ -1958,6 +1960,14 @@ class NWidgetScenarioToolbarContainer : public NWidgetToolbarContainer {
  */
 using ToolbarButtonProc = CallBackFunction(Window *w);
 
+/* --- Underground view toggle --- */
+
+static CallBackFunction ToolbarUndergroundClick(Window *)
+{
+	ShowUndergroundToolbar();
+	return CallBackFunction::None;
+}
+
 static ToolbarButtonProc * const _toolbar_button_procs[] = {
 	ToolbarPauseClick,
 	ToolbarFastForwardClick,
@@ -1989,6 +1999,7 @@ static ToolbarButtonProc * const _toolbar_button_procs[] = {
 	ToolbarMusicClick,
 	ToolbarNewspaperClick,
 	ToolbarHelpClick,
+	ToolbarUndergroundClick,
 	ToolbarSwitchClick,
 };
 
@@ -2081,6 +2092,7 @@ struct MainToolbarWindow : Window {
 			case MTHK_CLIENT_LIST: if (_networking) ShowClientList(); break;
 			case MTHK_SIGN_LIST: ShowSignList(); break;
 			case MTHK_LANDINFO: cbf = PlaceLandBlockInfo(); break;
+			case MTHK_UNDERGROUND: ShowUndergroundToolbar(); break;
 			default: return ES_NOT_HANDLED;
 		}
 		if (cbf != CallBackFunction::None) _last_started_action = cbf;
@@ -2172,6 +2184,7 @@ struct MainToolbarWindow : Window {
 		Hotkey(0, "client_list", MTHK_CLIENT_LIST),
 		Hotkey(0, "sign_list", MTHK_SIGN_LIST),
 		Hotkey(0, "land_info", MTHK_LANDINFO),
+		Hotkey(WKC_CTRL | 'U', "underground", MTHK_UNDERGROUND),
 	}};
 };
 
@@ -2209,6 +2222,7 @@ static std::unique_ptr<NWidgetBase> MakeMainToolbar()
 		{WID_TN_MUSIC_SOUND,  WWT_IMGBTN,     SPR_IMG_MUSIC},
 		{WID_TN_MESSAGES,     WWT_IMGBTN,     SPR_IMG_MESSAGES},
 		{WID_TN_HELP,         WWT_IMGBTN,     SPR_IMG_QUERY},
+		{WID_TN_UNDERGROUND,  WWT_IMGBTN,     SPR_IMG_TUNNEL_RAIL},
 		{WID_TN_SWITCH_BAR,   WWT_IMGBTN,     SPR_IMG_SWITCH_TOOLBAR},
 	};
 

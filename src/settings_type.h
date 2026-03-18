@@ -441,6 +441,8 @@ struct ConstructionSettings {
 	uint16_t max_bridge_length;                ///< maximum length of bridges
 	uint8_t max_bridge_height;                ///< maximum height of bridges
 	uint16_t max_tunnel_length;                ///< maximum length of tunnels
+	uint8_t max_underground_depth;            ///< maximum underground depth (1-10)
+	uint8_t underground_cost_multiplier;      ///< cost multiplier for underground construction (1-10)
 	uint8_t train_signal_side;                ///< show signals on left / driving / right side
 	bool   extra_dynamite;                   ///< extra dynamite
 	bool   road_stop_on_town_road;           ///< allow building of drive-through road stops on town owned roads

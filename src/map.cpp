@@ -13,6 +13,7 @@
 #include "error_func.h"
 #include "string_func.h"
 #include "pathfinder/water_regions.h"
+#include "multilayer/multilayer_map.h"
 
 #include "safeguards.h"
 
@@ -56,6 +57,8 @@
 
 	Tile::base_tiles = std::make_unique<Tile::TileBase[]>(Map::size);
 	Tile::extended_tiles = std::make_unique<Tile::TileExtended[]>(Map::size);
+
+	_multilayer_map.Allocate(Map::size);
 
 	AllocateWaterRegions();
 }

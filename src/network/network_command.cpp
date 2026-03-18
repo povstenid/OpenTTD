@@ -33,6 +33,7 @@
 #include "../object_cmd.h"
 #include "../order_cmd.h"
 #include "../rail_cmd.h"
+#include "../multilayer/underground_cmd.h"
 #include "../road_cmd.h"
 #include "../roadveh_cmd.h"
 #include "../settings_cmd.h"

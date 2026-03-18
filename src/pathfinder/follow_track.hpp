@@ -18,6 +18,7 @@
 #include "../tunnelbridge_map.h"
 #include "../depot_map.h"
 #include "pathfinder_func.h"
+#include "../multilayer/portal_registry.h"
 
 /**
  * Track follower helper template class (can serve pathfinders and vehicle
@@ -198,13 +199,41 @@ struct CFollowTrackT {
 	}
 
 protected:
+	bool is_portal = false; ///< Last move passed through an underground portal.
+
 	/** Follow the exitdir from old_tile and fill new_tile and tiles_skipped */
 	inline void FollowTileExit()
 	{
 		this->is_station = false;
 		this->is_bridge = false;
 		this->is_tunnel = false;
+		this->is_portal = false;
 		this->tiles_skipped = 0;
+
+		/* Underground portal: lookup precomputed connections (like tunnel teleport). */
+		if constexpr (Ttr_type_ == TRANSPORT_RAIL) {
+			const auto &conns = GetPortalConnections(this->old_tile);
+			for (const auto &conn : conns) {
+				if (conn.entry_dir == this->exitdir && IsValidTile(conn.exit_tile)) {
+					/* Teleport to tile BEYOND exit portal (like vanilla tunnel).
+					 * conn.exit_tile is the portal tile; we need the tile after it. */
+					TileIndexDiffC step = TileIndexDiffCByDiagDir(conn.exit_dir);
+					int bx = TileX(conn.exit_tile) + step.x;
+					int by = TileY(conn.exit_tile) + step.y;
+					if (bx >= 0 && by >= 0 && bx < (int)Map::SizeX() && by < (int)Map::SizeY()) {
+						TileIndex beyond = TileXY(bx, by);
+						/* Only teleport if beyond tile has rail. */
+						TrackBits tracks = TrackStatusToTrackBits(GetTileTrackStatus(beyond, TRANSPORT_RAIL, 0));
+						if (tracks != TRACK_BIT_NONE) {
+							this->is_portal = true;
+							this->new_tile = beyond;
+							this->tiles_skipped = conn.path_length;
+							return;
+						}
+					}
+				}
+			}
+		}
 
 		/* extra handling for tunnels and bridges in our direction */
 		if (IsTileType(this->old_tile, TileType::TunnelBridge)) {

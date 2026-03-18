@@ -12,6 +12,7 @@
 #include "vehicle_func.h"
 #include "newgrf_station.h"
 #include "pathfinder/follow_track.hpp"
+#include "multilayer/multilayer_map.h"
 
 #include "safeguards.h"
 
@@ -302,6 +303,11 @@ PBSTileInfo FollowTrainReservation(const Train *v, Vehicle **train_on_res)
 {
 	assert(v->type == VEH_TRAIN);
 
+	/* Underground trains have no surface reservations. */
+	if (v->IsUnderground()) {
+		return PBSTileInfo(v->tile, TRACKDIR_BEGIN, false);
+	}
+
 	TileIndex tile = v->tile;
 	Trackdir  trackdir = v->GetVehicleTrackdir();
 
@@ -459,4 +465,60 @@ bool IsWaitingPositionFree(const Train *v, TileIndex tile, Trackdir trackdir, bo
 	if (Rail90DegTurnDisallowed(GetTileRailType(ft.old_tile), GetTileRailType(ft.new_tile), forbid_90deg)) ft.new_td_bits &= ~TrackdirCrossesTrackdirs(trackdir);
 
 	return !HasReservedTracks(ft.new_tile, TrackdirBitsToTrackBits(ft.new_td_bits));
+}
+
+/* === Underground PBS === */
+
+/**
+ * Get reserved trackbits for an underground slice.
+ * @param ref The underground tile reference.
+ * @return Reserved trackbits, or TRACK_BIT_NONE.
+ */
+TrackBits GetUndergroundReservedTrackbits(const TileRef &ref)
+{
+	if (!ref.IsValid()) return TRACK_BIT_NONE;
+
+	const TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
+	if (slice.kind != SliceKind::Track) return TRACK_BIT_NONE;
+
+	return static_cast<TrackBits>(slice.track.reserved);
+}
+
+/**
+ * Try to reserve a track on an underground slice.
+ * @param ref The underground tile reference.
+ * @param t The track to reserve.
+ * @return True if reservation was successful.
+ */
+bool TryReserveUndergroundTrack(const TileRef &ref, Track t)
+{
+	if (!ref.IsValid()) return false;
+
+	TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
+	if (slice.kind != SliceKind::Track) return false;
+
+	TrackBits reserved = static_cast<TrackBits>(slice.track.reserved);
+	TrackBits trackbit = TrackToTrackBits(t);
+
+	/* Check if already reserved or conflicting. */
+	if (reserved & trackbit) return false;
+
+	slice.track.reserved = static_cast<uint8_t>(reserved | trackbit);
+	return true;
+}
+
+/**
+ * Unreserve a track on an underground slice.
+ * @param ref The underground tile reference.
+ * @param t The track to unreserve.
+ */
+void UnreserveUndergroundTrack(const TileRef &ref, Track t)
+{
+	if (!ref.IsValid()) return;
+
+	TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
+	if (slice.kind != SliceKind::Track) return;
+
+	TrackBits reserved = static_cast<TrackBits>(slice.track.reserved);
+	slice.track.reserved = static_cast<uint8_t>(reserved & ~TrackToTrackBits(t));
 }

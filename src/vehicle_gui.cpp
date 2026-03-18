@@ -3179,6 +3179,12 @@ public:
 
 		if (v->vehstatus.Test(VehState::Crashed)) return GetString(STR_VEHICLE_STATUS_CRASHED);
 
+		/* Show underground status for trains. */
+		if (v->type == VEH_TRAIN && Train::From(v)->IsUnderground()) {
+			int16_t depth = Train::From(v)->underground_depth;
+			return fmt::format("Underground (z={}), {} km/h", depth, v->GetDisplaySpeed());
+		}
+
 		if (v->type != VEH_AIRCRAFT && v->breakdown_ctr == 1) return GetString(STR_VEHICLE_STATUS_BROKEN_DOWN);
 
 		if (v->vehstatus.Test(VehState::Stopped) && (!mouse_over_start_stop || v->IsStoppedInDepot())) {
