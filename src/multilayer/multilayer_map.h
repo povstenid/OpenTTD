@@ -64,6 +64,9 @@ public:
 	TileSlice &GetSlice(SliceID id) { assert(id < this->slice_pool.size()); return this->slice_pool[id]; }
 	const TileSlice &GetSlice(SliceID id) const { assert(id < this->slice_pool.size()); return this->slice_pool[id]; }
 
+	/** Check if a SliceID is within pool bounds. */
+	bool IsValidSlice(SliceID id) const { return id < this->slice_pool.size(); }
+
 	/**
 	 * Get the Surface slice for a given tile.
 	 * Every column is guaranteed to have exactly one Surface slice (the first one).

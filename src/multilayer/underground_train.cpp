@@ -49,8 +49,9 @@ bool HasEnterablePortal(TileIndex tile, DiagDirection enterdir)
 	if (sid == INVALID_SLICE_ID) return false;
 
 	const TileSlice &ps = _multilayer_map.GetSlice(sid);
-	/* Portal direction must match entry direction. */
-	return static_cast<DiagDirection>(ps.portal.direction) == enterdir;
+	/* A surface train can enter a portal when it approaches along the same rail axis.
+	 * The exact diagonal may differ depending on how the surface throat was built. */
+	return DiagDirToAxis(static_cast<DiagDirection>(ps.portal.direction)) == DiagDirToAxis(enterdir);
 }
 
 /**
@@ -69,8 +70,43 @@ TrackBits GetUndergroundTrackBits(TileIndex tile, int16_t depth, DiagDirection e
 		return all_tracks & DiagdirReachesTracks(enterdir);
 	}
 
+	if (slice.kind == SliceKind::StationTile) {
+		TrackBits all_tracks = static_cast<TrackBits>(slice.station.tracks);
+		return all_tracks & DiagdirReachesTracks(enterdir);
+	}
+
 	/* Portal slices return NO tracks — exit is handled by TrainController
 	 * dead-end detection: bits==NONE → check Portal → exit to surface. */
 
 	return TRACK_BIT_NONE;
+}
+
+/**
+ * Get the length of an underground station platform by walking in a direction.
+ */
+int GetUndergroundPlatformLength(TileIndex tile, int16_t depth, uint16_t station_id, DiagDirection dir)
+{
+	int length = 0;
+	TileIndexDiffC diff = TileIndexDiffCByDiagDir(dir);
+
+	while (true) {
+		int x = TileX(tile);
+		int y = TileY(tile);
+		if (x < 0 || y < 0 || x >= (int)Map::SizeX() || y >= (int)Map::SizeY()) break;
+
+		SliceID sid = _multilayer_map.FindSliceAt(tile, depth);
+		if (sid == INVALID_SLICE_ID) break;
+
+		const TileSlice &slice = _multilayer_map.GetSlice(sid);
+		if (slice.kind != SliceKind::StationTile) break;
+		if (slice.station.station_id != station_id) break;
+
+		length++;
+		int nx = x + diff.x;
+		int ny = y + diff.y;
+		if (nx < 0 || ny < 0 || nx >= (int)Map::SizeX() || ny >= (int)Map::SizeY()) break;
+		tile = TileXY(nx, ny);
+	}
+
+	return length;
 }

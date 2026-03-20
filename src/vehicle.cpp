@@ -2223,7 +2223,9 @@ void Vehicle::DeleteUnreachedImplicitOrders()
  */
 void Vehicle::BeginLoading()
 {
-	assert(IsTileType(this->tile, TileType::Station) || this->type == VEH_SHIP);
+	assert(IsTileType(this->tile, TileType::Station) ||
+			this->type == VEH_SHIP ||
+			(this->type == VEH_TRAIN && Train::From(this)->IsUnderground()));
 
 	TimerGameTick::Ticks travel_time = TimerGameTick::counter - this->last_loading_tick;
 	if (this->current_order.IsType(OT_GOTO_STATION) &&
@@ -2399,6 +2401,9 @@ void Vehicle::LeaveStation()
 	Station *st = Station::Get(this->last_station_visited);
 	this->CancelReservation(StationID::Invalid(), st);
 	st->loading_vehicles.remove(this);
+	if (this->type == VEH_TRAIN && Train::From(this)->IsUnderground()) {
+		this->vehstatus.Reset(VehState::Stopped);
+	}
 
 	HideFillingPercent(&this->fill_percent_te_id);
 	trip_occupancy = CalcPercentVehicleFilled(this, nullptr);
@@ -2880,7 +2885,7 @@ void Vehicle::ShowVisualEffect() const
 				IsDepotTile(v->tile) ||
 				IsTunnelTile(v->tile) ||
 				(v->type == VEH_TRAIN &&
-				!HasPowerOnRail(Train::From(v)->railtypes, GetTileRailType(v->tile)))) {
+				!HasPowerOnRail(Train::From(v)->railtypes, Train::From(v)->GetCurrentRailType()))) {
 			continue;
 		}
 

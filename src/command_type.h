@@ -386,6 +386,9 @@ enum class Commands : uint8_t {
 	BuildUndergroundStation, ///< build underground station platform
 	BuildExitSurface, ///< build surface exit for underground station
 	BuildRamp, ///< build underground ramp between depth levels
+	BuildUndergroundSignal, ///< build PBS signal on underground track
+	RemoveUndergroundSignal, ///< remove PBS signal from underground track
+	RemoveUndergroundStation, ///< remove underground station platform
 
 	End, ///< @important Must ALWAYS be on the end of this list!! (period)
 };

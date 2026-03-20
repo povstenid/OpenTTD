@@ -13,6 +13,9 @@
 #include "newgrf_station.h"
 #include "pathfinder/follow_track.hpp"
 #include "multilayer/multilayer_map.h"
+#include "map_func.h"
+#include "track_func.h"
+#include "direction_func.h"
 
 #include "safeguards.h"
 
@@ -470,6 +473,64 @@ bool IsWaitingPositionFree(const Train *v, TileIndex tile, Trackdir trackdir, bo
 /* === Underground PBS === */
 
 /**
+ * Check if an underground track slice has a PBS signal on a given track.
+ * @param ref Underground tile reference.
+ * @param t The track to check.
+ * @return True if a PBS signal is present.
+ */
+bool HasUndergroundSignalOnTrack(const TileRef &ref, Track t)
+{
+	if (!ref.IsValid()) return false;
+
+	const TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
+	if (slice.kind != SliceKind::Track) return false;
+
+	return (slice.track.signal_mask & TrackToTrackBits(t)) != 0;
+}
+
+/**
+ * Get the computed state of an underground PBS signal.
+ * Underground signals are always PBS one-way. State is computed dynamically:
+ * GREEN if no conflicting reservation exists on the next tile, RED otherwise.
+ * @param ref Underground tile reference (tile WITH the signal).
+ * @param td The trackdir the train wants to travel.
+ * @return SIGNAL_STATE_GREEN or SIGNAL_STATE_RED.
+ */
+SignalState GetUndergroundSignalState(const TileRef &ref, Trackdir td)
+{
+	if (!ref.IsValid()) return SIGNAL_STATE_RED;
+
+	const TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
+	if (slice.kind != SliceKind::Track) return SIGNAL_STATE_RED;
+
+	Track t = TrackdirToTrack(td);
+	if (!(slice.track.signal_mask & TrackToTrackBits(t))) return SIGNAL_STATE_GREEN; /* No signal = free */
+
+	/* Check next tile for conflicting reservation. */
+	DiagDirection exitdir = TrackdirToExitdir(td);
+	TileIndexDiffC diff = TileIndexDiffCByDiagDir(exitdir);
+	int nx = TileX(ref.tile) + diff.x;
+	int ny = TileY(ref.tile) + diff.y;
+	if (nx < 0 || ny < 0 || nx >= (int)Map::SizeX() || ny >= (int)Map::SizeY()) return SIGNAL_STATE_GREEN;
+
+	TileIndex next_tile = TileXY(nx, ny);
+	int16_t depth = slice.span.z_bot;
+
+	SliceID next_sid = _multilayer_map.FindSliceAt(next_tile, depth);
+	if (next_sid == INVALID_SLICE_ID) return SIGNAL_STATE_GREEN; /* No track ahead = free */
+
+	const TileSlice &next_slice = _multilayer_map.GetSlice(next_sid);
+	TrackBits next_reserved = TRACK_BIT_NONE;
+	if (next_slice.kind == SliceKind::Track) next_reserved = static_cast<TrackBits>(next_slice.track.reserved);
+	else if (next_slice.kind == SliceKind::StationTile) next_reserved = static_cast<TrackBits>(next_slice.station.reserved);
+
+	/* Only overlapping reservations block the signal. */
+	if (TrackOverlapsTracks(next_reserved, t)) return SIGNAL_STATE_RED;
+
+	return SIGNAL_STATE_GREEN;
+}
+
+/**
  * Get reserved trackbits for an underground slice.
  * @param ref The underground tile reference.
  * @return Reserved trackbits, or TRACK_BIT_NONE.
@@ -479,9 +540,10 @@ TrackBits GetUndergroundReservedTrackbits(const TileRef &ref)
 	if (!ref.IsValid()) return TRACK_BIT_NONE;
 
 	const TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
-	if (slice.kind != SliceKind::Track) return TRACK_BIT_NONE;
+	if (slice.kind == SliceKind::Track) return static_cast<TrackBits>(slice.track.reserved);
+	if (slice.kind == SliceKind::StationTile) return static_cast<TrackBits>(slice.station.reserved);
 
-	return static_cast<TrackBits>(slice.track.reserved);
+	return TRACK_BIT_NONE;
 }
 
 /**
@@ -495,16 +557,23 @@ bool TryReserveUndergroundTrack(const TileRef &ref, Track t)
 	if (!ref.IsValid()) return false;
 
 	TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
-	if (slice.kind != SliceKind::Track) return false;
-
-	TrackBits reserved = static_cast<TrackBits>(slice.track.reserved);
 	TrackBits trackbit = TrackToTrackBits(t);
 
-	/* Check if already reserved or conflicting. */
-	if (reserved & trackbit) return false;
+	if (slice.kind == SliceKind::Track) {
+		TrackBits reserved = static_cast<TrackBits>(slice.track.reserved);
+		if (TrackOverlapsTracks(reserved, t)) return false;
+		slice.track.reserved = static_cast<uint8_t>(reserved | trackbit);
+		return true;
+	}
 
-	slice.track.reserved = static_cast<uint8_t>(reserved | trackbit);
-	return true;
+	if (slice.kind == SliceKind::StationTile) {
+		TrackBits reserved = static_cast<TrackBits>(slice.station.reserved);
+		if (TrackOverlapsTracks(reserved, t)) return false;
+		slice.station.reserved = static_cast<uint8_t>(reserved | trackbit);
+		return true;
+	}
+
+	return false;
 }
 
 /**
@@ -517,8 +586,11 @@ void UnreserveUndergroundTrack(const TileRef &ref, Track t)
 	if (!ref.IsValid()) return;
 
 	TileSlice &slice = _multilayer_map.GetSlice(ref.slice);
-	if (slice.kind != SliceKind::Track) return;
+	TrackBits mask = ~TrackToTrackBits(t);
 
-	TrackBits reserved = static_cast<TrackBits>(slice.track.reserved);
-	slice.track.reserved = static_cast<uint8_t>(reserved & ~TrackToTrackBits(t));
+	if (slice.kind == SliceKind::Track) {
+		slice.track.reserved = static_cast<uint8_t>(static_cast<TrackBits>(slice.track.reserved) & mask);
+	} else if (slice.kind == SliceKind::StationTile) {
+		slice.station.reserved = static_cast<uint8_t>(static_cast<TrackBits>(slice.station.reserved) & mask);
+	}
 }

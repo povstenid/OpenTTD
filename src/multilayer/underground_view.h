@@ -12,7 +12,7 @@
 
 #include "../openttd.h"
 
-/** The current underground view depth. Negative values = underground. */
+/** The current underground view depth as an absolute z level. */
 extern int16_t _underground_view_depth;
 
 /** Check if underground view mode is active. */

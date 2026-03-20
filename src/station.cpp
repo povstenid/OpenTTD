@@ -495,7 +495,22 @@ void Station::RecomputeCatchment(bool no_clear_nearby_lists)
 		return;
 	}
 
-	this->catchment_tiles.Initialize(GetCatchmentRect());
+	Rect catchment_rect = GetCatchmentRect();
+	auto sc_it = _station_complexes.find(this->index.base());
+	if (sc_it != _station_complexes.end()) {
+		for (const auto *exit_node : sc_it->second.GetExits()) {
+			if (!exit_node->ref.IsValid()) continue;
+
+			TileIndex exit_tile = exit_node->ref.tile;
+			const uint r = CA_TRAIN;
+			catchment_rect.left = std::min<int>(catchment_rect.left, std::max<int>(TileX(exit_tile) - static_cast<int>(r), 0));
+			catchment_rect.top = std::min<int>(catchment_rect.top, std::max<int>(TileY(exit_tile) - static_cast<int>(r), 0));
+			catchment_rect.right = std::max<int>(catchment_rect.right, std::min<int>(TileX(exit_tile) + static_cast<int>(r), Map::MaxX()));
+			catchment_rect.bottom = std::max<int>(catchment_rect.bottom, std::min<int>(TileY(exit_tile) + static_cast<int>(r), Map::MaxY()));
+		}
+	}
+
+	this->catchment_tiles.Initialize(catchment_rect);
 
 	/* Loop finding all station tiles */
 	TileArea ta(TileXY(this->rect.left, this->rect.top), TileXY(this->rect.right, this->rect.bottom));
@@ -511,7 +526,6 @@ void Station::RecomputeCatchment(bool no_clear_nearby_lists)
 	}
 
 	/* Also include catchment from StationComplex ExitSurface tiles. */
-	auto sc_it = _station_complexes.find(this->index.base());
 	if (sc_it != _station_complexes.end()) {
 		for (const auto *exit_node : sc_it->second.GetExits()) {
 			if (!exit_node->ref.IsValid()) continue;
@@ -519,7 +533,9 @@ void Station::RecomputeCatchment(bool no_clear_nearby_lists)
 			/* ExitSurface tiles provide standard station catchment. */
 			uint r = CA_TRAIN; /* Use train catchment radius. */
 			TileArea ta2 = TileArea(exit_tile, 1, 1).Expand(r);
-			for (TileIndex tile2 : ta2) this->catchment_tiles.SetTile(tile2);
+			for (TileIndex tile2 : ta2) {
+				this->catchment_tiles.SetTile(tile2);
+			}
 		}
 	}
 

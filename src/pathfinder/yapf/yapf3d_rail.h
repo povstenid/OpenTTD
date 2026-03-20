@@ -63,7 +63,7 @@ struct Yapf3DResult {
 	Trackdir first_trackdir;    ///< First trackdir to take.
 	TileRef exit_portal;        ///< Portal where train exits underground (if applicable).
 	int total_cost = 0;         ///< Total path cost.
-	std::vector<TileRef> path;  ///< Full path (for debugging / reservation).
+	std::vector<std::pair<TileRef, Trackdir>> path;  ///< Full path with chosen trackdirs.
 };
 
 /**
@@ -88,7 +88,17 @@ struct Yapf3DResult {
  * @param target_tile Desired destination tile (on surface, for heuristic).
  * @return Yapf3DResult with path info.
  */
-Yapf3DResult Yapf3DFindPath(const Train *v, TileIndex entry_tile, Trackdir entry_td, TileIndex target_tile);
+Yapf3DResult Yapf3DFindPath(const Train *, TileIndex entry_tile, Trackdir entry_td, TileIndex target_tile);
+
+/**
+ * Find a path through underground starting from an already-underground position.
+ * Used for re-pathfinding after a PBS signal turns green.
+ * @param start_ref   Current underground tile + slice.
+ * @param start_td    Current trackdir.
+ * @param target_tile Desired destination tile (surface, for heuristic).
+ * @return Yapf3DResult with path info.
+ */
+Yapf3DResult Yapf3DFindPathFromRef(TileRef start_ref, Trackdir start_td, TileIndex target_tile);
 
 /**
  * Enumerate underground track neighbors of a TileRef.
@@ -99,5 +109,14 @@ Yapf3DResult Yapf3DFindPath(const Train *v, TileIndex entry_tile, Trackdir entry
  */
 void Yapf3DEnumerateNeighbors(const TileRef &ref, Trackdir td,
                                std::vector<std::pair<TileRef, Trackdir>> &out_neighbors);
+
+/**
+ * Reserve underground tracks along a found path.
+ * Reserves from the start until the first PBS signal (safe waiting position)
+ * or until the end of the path.
+ * @param result The path found by Yapf3DFindPath.
+ * @return True if reservation succeeded for all tiles up to the first signal.
+ */
+bool Yapf3DReservePath(const Yapf3DResult &result);
 
 #endif /* YAPF3D_RAIL_H */

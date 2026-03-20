@@ -1590,7 +1590,8 @@ static void ReserveConsist(Station *st, Vehicle *u, CargoArray *consist_capleft,
  */
 static void UpdateLoadUnloadTicks(Vehicle *front, const Station *st, int ticks)
 {
-	if (front->type == VEH_TRAIN && _settings_game.order.station_length_loading_penalty) {
+	if (front->type == VEH_TRAIN && _settings_game.order.station_length_loading_penalty &&
+			!Train::From(front)->IsUnderground()) {
 		/* Each platform tile is worth 2 rail vehicles. */
 		int overhang = front->GetGroundVehicleCache()->cached_total_length - st->GetPlatformLength(front->tile) * TILE_SIZE;
 		if (overhang > 0) {
@@ -1627,12 +1628,22 @@ static void LoadUnloadVehicle(Vehicle *front)
 	/* We have not waited enough time till the next round of loading/unloading */
 	if (front->load_unload_ticks != 0) return;
 
-	if (front->type == VEH_TRAIN && (!IsTileType(front->tile, TileType::Station) || GetStationIndex(front->tile) != st->index)) {
-		/* The train reversed in the station. Take the "easy" way
-		 * out and let the train just leave as it always did. */
-		front->vehicle_flags.Set(VehicleFlag::LoadingFinished);
-		front->load_unload_ticks = 1;
-		return;
+	if (front->type == VEH_TRAIN) {
+		Train *t = Train::From(front);
+		bool on_station = false;
+		if (t->IsUnderground()) {
+			/* Underground train — check if on a StationTile matching the station. */
+			on_station = true; /* Trust last_station_visited set during entry. */
+		} else {
+			on_station = IsTileType(front->tile, TileType::Station) && GetStationIndex(front->tile) == st->index;
+		}
+		if (!on_station) {
+			/* The train reversed in the station. Take the "easy" way
+			 * out and let the train just leave as it always did. */
+			front->vehicle_flags.Set(VehicleFlag::LoadingFinished);
+			front->load_unload_ticks = 1;
+			return;
+		}
 	}
 
 	int new_load_unload_ticks = 0;
@@ -1824,8 +1835,10 @@ static void LoadUnloadVehicle(Vehicle *front)
 
 	if (anything_loaded || anything_unloaded) {
 		if (front->type == VEH_TRAIN) {
-			TriggerStationRandomisation(st, front->tile, StationRandomTrigger::VehicleLoads);
-			TriggerStationAnimation(st, front->tile, StationAnimationTrigger::VehicleLoads);
+			if (IsTileType(front->tile, TileType::Station)) {
+				TriggerStationRandomisation(st, front->tile, StationRandomTrigger::VehicleLoads);
+				TriggerStationAnimation(st, front->tile, StationAnimationTrigger::VehicleLoads);
+			}
 		} else if (front->type == VEH_ROAD) {
 			TriggerRoadStopRandomisation(st, front->tile, StationRandomTrigger::VehicleLoads);
 			TriggerRoadStopAnimation(st, front->tile, StationAnimationTrigger::VehicleLoads);
@@ -1929,10 +1942,13 @@ void LoadUnloadStation(Station *st)
 
 	/* Check if anything will be loaded at all. Otherwise we don't need to reserve either. */
 	for (Vehicle *v : st->loading_vehicles) {
-		if (v->vehstatus.Any({VehState::Stopped, VehState::Crashed})) continue;
+		bool underground_loading = v->type == VEH_TRAIN && Train::From(v)->IsUnderground() && v->current_order.IsType(OT_LOADING);
+		if (v->vehstatus.Test(VehState::Crashed) || (v->vehstatus.Test(VehState::Stopped) && !underground_loading)) continue;
 
 		assert(v->load_unload_ticks != 0);
-		if (--v->load_unload_ticks == 0) last_loading = v;
+		if (--v->load_unload_ticks == 0) {
+			last_loading = v;
+		}
 	}
 
 	/* We only need to reserve and load/unload up to the last loading vehicle.
@@ -1945,7 +1961,8 @@ void LoadUnloadStation(Station *st)
 	if (last_loading == nullptr) return;
 
 	for (Vehicle *v : st->loading_vehicles) {
-		if (!v->vehstatus.Any({VehState::Stopped, VehState::Crashed})) LoadUnloadVehicle(v);
+		bool underground_loading = v->type == VEH_TRAIN && Train::From(v)->IsUnderground() && v->current_order.IsType(OT_LOADING);
+		if (!v->vehstatus.Test(VehState::Crashed) && (!v->vehstatus.Test(VehState::Stopped) || underground_loading)) LoadUnloadVehicle(v);
 		if (v == last_loading) break;
 	}
 

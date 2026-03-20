@@ -22,11 +22,13 @@
 #include "../debug.h"
 #include "../console_func.h"
 #include "portal_registry.h"
+#include "../station_base.h"
+#include "../station_kdtree.h"
+#include "../town.h"
+#include "../station_func.h"
+#include "../table/strings.h"
 
 #include "../safeguards.h"
-
-/** Maximum allowed underground depth (negative Z). */
-static constexpr int16_t MAX_UNDERGROUND_DEPTH = -10;
 
 /** Cost multiplier for underground construction (more expensive than surface). */
 static constexpr int UNDERGROUND_COST_MULTIPLIER = 4;
@@ -56,8 +58,8 @@ CommandCost CmdBuildUndergroundRail(DoCommandFlags flags, TileIndex tile, RailTy
 		IConsolePrint(CC_DEBUG, "  FAIL: IsValidTrack");
 		return CMD_ERROR;
 	}
-	if (depth >= 0 || depth < MAX_UNDERGROUND_DEPTH) {
-		IConsolePrint(CC_DEBUG, "  FAIL: depth check (depth={} MAX={})", depth, MAX_UNDERGROUND_DEPTH);
+	if (!IsValidMetroZ(tile, depth)) {
+		IConsolePrint(CC_DEBUG, "  FAIL: z check (z={} surface={} min={})", depth, GetMetroSurfaceZ(tile), GetMetroMinZ(tile));
 		return CMD_ERROR;
 	}
 
@@ -141,8 +143,8 @@ CommandCost CmdBuildUndergroundRail(DoCommandFlags flags, TileIndex tile, RailTy
 CommandCost CmdRemoveUndergroundRail(DoCommandFlags flags, TileIndex tile, Track track, int16_t depth)
 {
 	if (!IsValidTrack(track)) return CMD_ERROR;
-	if (depth >= 0 || depth < MAX_UNDERGROUND_DEPTH) return CMD_ERROR;
 	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!IsValidMetroZ(tile, depth)) return CMD_ERROR;
 
 	TrackBits trackbit = TrackToTrackBits(track);
 
@@ -180,32 +182,29 @@ CommandCost CmdRemoveUndergroundRail(DoCommandFlags flags, TileIndex tile, Track
 
 /**
  * Build a portal (entry/exit between surface and underground).
- * Works like vanilla tunnel entry: requires inclined slope, direction auto-detected.
+ * Works like vanilla tunnel entry on sloped tiles, but also accepts flat tiles
+ * when the caller provides an explicit direction.
  * @param flags    Command flags.
  * @param tile     Surface tile on a slope.
  * @param railtype Type of rail.
- * @param dir      Ignored (auto-detected from slope). Kept for API compatibility.
+ * @param dir      Portal direction on flat tiles, otherwise auto-detected from slope.
  * @param depth    Underground depth the portal connects to.
  * @return The cost of the operation or an error.
  */
 CommandCost CmdBuildPortal(DoCommandFlags flags, TileIndex tile, RailType railtype, DiagDirection dir, int16_t depth)
 {
 	if (railtype >= RAILTYPE_END) return CMD_ERROR;
-	if (depth >= 0 || depth < MAX_UNDERGROUND_DEPTH) return CMD_ERROR;
 	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!IsValidMetroZ(tile, depth)) return CMD_ERROR;
 
-	/* Portal requires inclined slope — like vanilla tunnel. */
+	/* Prefer the slope direction on inclined tiles. Flat tiles use the caller-supplied direction. */
 	Slope slope = GetTileSlope(tile);
 	DiagDirection slope_dir = GetInclinedSlopeDirection(slope);
-	if (slope_dir == INVALID_DIAGDIR) {
-		IConsolePrint(CC_DEBUG, "CmdBuildPortal: not an inclined slope (slope={})", (int)slope);
+	if (slope_dir != INVALID_DIAGDIR) {
+		dir = slope_dir;
+	} else if (slope != SLOPE_FLAT || dir >= DIAGDIR_END) {
 		return CMD_ERROR;
 	}
-
-	/* Use slope direction as portal direction. */
-	dir = slope_dir;
-
-	IConsolePrint(CC_DEBUG, "CmdBuildPortal: tile={} slope={} dir={} depth={}", tile.base(), (int)slope, (int)dir, depth);
 
 	/* Check if there's already a portal at this tile. */
 	SliceID existing = _multilayer_map.FindSliceByKind(tile, SliceKind::Portal);
@@ -228,17 +227,14 @@ CommandCost CmdBuildPortal(DoCommandFlags flags, TileIndex tile, RailType railty
 
 		/* Make surface tile passable: build rail track matching the slope direction.
 		 * On slopes, only certain tracks are valid (X track on NE/SW slope, Y on NW/SE). */
-		Track portal_track = (DiagDirToAxis(dir) == AXIS_X) ? TRACK_X : TRACK_Y;
-		auto rail_result = Command<Commands::BuildRail>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, railtype, portal_track, false);
-		if (!rail_result.Succeeded()) {
-			IConsolePrint(CC_DEBUG, "Portal: failed to build surface rail (track={}), trying other", (int)portal_track);
-			/* Try the perpendicular track as fallback. */
-			portal_track = (portal_track == TRACK_X) ? TRACK_Y : TRACK_X;
-			Command<Commands::BuildRail>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, railtype, portal_track, false);
+			Track portal_track = (DiagDirToAxis(dir) == AXIS_X) ? TRACK_X : TRACK_Y;
+			auto rail_result = Command<Commands::BuildRail>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, railtype, portal_track, false);
+			if (!rail_result.Succeeded()) {
+				/* Try the perpendicular track as fallback. */
+				portal_track = (portal_track == TRACK_X) ? TRACK_Y : TRACK_X;
+				Command<Commands::BuildRail>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, railtype, portal_track, false);
+			}
 		}
-
-		IConsolePrint(CC_DEBUG, "Portal built: tile={} dir={} depth={} track={}", tile.base(), (int)dir, depth, (int)portal_track);
-	}
 
 	if (flags.Test(DoCommandFlag::Execute)) RecomputePortalConnections();
 	return CommandCost(EXPENSES_CONSTRUCTION, RailBuildCost(railtype) * UNDERGROUND_COST_MULTIPLIER * 2);
@@ -250,20 +246,75 @@ CommandCost CmdBuildPortal(DoCommandFlags flags, TileIndex tile, RailType railty
  * @param tile       Surface tile position.
  * @param railtype   Rail type for the platform.
  * @param depth      Underground depth.
- * @param station_id Station to attach to (0 = create new via StationComplex).
+ * @param station_id Station to attach to (0 = create new).
+ * @param axis       Platform direction (AXIS_X or AXIS_Y).
  * @return Cost or error.
  */
-CommandCost CmdBuildUndergroundStation(DoCommandFlags flags, TileIndex tile, RailType railtype, int16_t depth, uint16_t station_id)
+CommandCost CmdBuildUndergroundStation(DoCommandFlags flags, TileIndex tile, RailType railtype, int16_t depth, uint16_t station_id, Axis axis)
 {
-	if (!ValParamRailType(railtype)) return CMD_ERROR;
-	if (depth >= 0 || depth < MAX_UNDERGROUND_DEPTH) return CMD_ERROR;
+	if (railtype >= RAILTYPE_END) return CMD_ERROR;
 	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!IsValidMetroZ(tile, depth)) return CMD_ERROR;
 
-	/* Check for existing slice at this depth. */
+	/* Check for existing slice at this depth. Allow replacing Track with Station. */
 	SliceID existing = _multilayer_map.FindSliceAt(tile, depth);
-	if (existing != INVALID_SLICE_ID) return CMD_ERROR;
+	if (existing != INVALID_SLICE_ID) {
+		const TileSlice &ex_slice = _multilayer_map.GetSlice(existing);
+		if (ex_slice.kind == SliceKind::Track) {
+			/* Will replace Track with StationTile — inherit railtype if not specified. */
+			if (railtype == RAILTYPE_END || railtype > RAILTYPE_END) {
+				railtype = static_cast<RailType>(ex_slice.track.railtype);
+			}
+			if (flags.Test(DoCommandFlag::Execute)) {
+				_multilayer_map.RemoveSliceFromColumn(tile, existing);
+				_multilayer_map.FreeSlice(existing);
+			}
+		} else {
+			return CMD_ERROR; /* Something else at this depth. */
+		}
+	}
+
+	/* If station_id != 0, validate it exists. */
+	if (station_id != 0 && !Station::IsValidID(StationID(station_id))) return CMD_ERROR;
+
+	/* If station_id == 0, we need to create a new station. */
+	if (station_id == 0 && !Station::CanAllocateItem()) return CMD_ERROR;
+
+	TrackBits platform_tracks = (axis == AXIS_X) ? TRACK_BIT_X : TRACK_BIT_Y;
 
 	if (flags.Test(DoCommandFlag::Execute)) {
+		/* Create new Station if needed. */
+		if (station_id == 0) {
+			Station *st = Station::Create(tile);
+			_station_kdtree.Insert(st->index);
+			st->town = ClosestTownFromTile(tile, UINT_MAX);
+			st->string_id = STR_SV_STNAME;
+			st->owner = _current_company;
+			st->rect.BeforeAddTile(tile, StationRect::ADD_FORCE);
+			st->AddFacility(StationFacility::Train, tile);
+			/* Set train_station to valid 1x1 area at surface tile above the platform.
+			 * Not a real station tile, but prevents INVALID_TILE assertion crashes
+			 * when station code iterates train_station. Surface code filters by
+			 * IsTileType(Station) and will skip this tile safely. */
+			st->train_station = TileArea(tile, 1, 1);
+			if (Company::IsValidID(_current_company)) {
+				st->town->have_ratings.Set(_current_company);
+			}
+			station_id = st->index.base();
+			st->UpdateVirtCoord();
+			IConsolePrint(CC_DEBUG, "Created new Station id={} for underground platform", station_id);
+		} else {
+			/* Extend existing station rect. */
+			Station *st = Station::Get(StationID(station_id));
+			st->rect.BeforeAddTile(tile, StationRect::ADD_FORCE);
+			if (!st->facilities.Test(StationFacility::Train)) {
+				st->AddFacility(StationFacility::Train, tile);
+				st->train_station = TileArea(tile, 1, 1);
+			} else if (st->train_station.tile == INVALID_TILE) {
+				st->train_station = TileArea(tile, 1, 1);
+			}
+		}
+
 		SliceID sid = _multilayer_map.AllocateSlice();
 		TileSlice &s = _multilayer_map.GetSlice(sid);
 		s.kind = SliceKind::StationTile;
@@ -271,6 +322,9 @@ CommandCost CmdBuildUndergroundStation(DoCommandFlags flags, TileIndex tile, Rai
 		s.owner = _current_company.base();
 		s.station.station_id = station_id;
 		s.station.role = 0; /* Platform. */
+		s.station.tracks = static_cast<uint8_t>(platform_tracks);
+		s.station.railtype = static_cast<uint8_t>(railtype);
+		s.station.reserved = 0;
 
 		if (!_multilayer_map.InsertSlice(tile, sid)) {
 			_multilayer_map.FreeSlice(sid);
@@ -279,12 +333,24 @@ CommandCost CmdBuildUndergroundStation(DoCommandFlags flags, TileIndex tile, Rai
 
 		/* Register in StationComplex. */
 		StationComplex &sc = GetOrCreateStationComplex(station_id);
+		sc.station_id = station_id;
 		StationComplexNode node;
 		node.ref = TileRef{tile, sid};
 		node.role = StationRole::Platform;
 		node.station_id = station_id;
 		node.depth = depth;
 		sc.nodes.push_back(node);
+
+		/* Auto-create ExitSurface on the same tile for catchment. */
+		StationComplexNode exit_node;
+		exit_node.ref = TileRef{tile, _multilayer_map.FindSliceByKind(tile, SliceKind::Surface)};
+		exit_node.role = StationRole::ExitSurface;
+		exit_node.station_id = station_id;
+		exit_node.depth = 0;
+		sc.nodes.push_back(exit_node);
+
+		/* Recompute catchment now that the ExitSurface node is registered. */
+		Station::Get(StationID(station_id))->RecomputeCatchment();
 	}
 
 	return CommandCost(EXPENSES_CONSTRUCTION, RailBuildCost(railtype) * UNDERGROUND_COST_MULTIPLIER * 3);
@@ -300,6 +366,15 @@ CommandCost CmdBuildUndergroundStation(DoCommandFlags flags, TileIndex tile, Rai
 CommandCost CmdBuildExitSurface(DoCommandFlags flags, TileIndex tile, uint16_t station_id)
 {
 	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!Station::IsValidID(StationID(station_id))) return CMD_ERROR;
+
+	auto sc_it = _station_complexes.find(station_id);
+	if (sc_it != _station_complexes.end()) {
+		for (const auto &existing : sc_it->second.nodes) {
+			if (existing.role != StationRole::ExitSurface) continue;
+			if (existing.ref.tile == tile) return CMD_ERROR;
+		}
+	}
 
 	if (flags.Test(DoCommandFlag::Execute)) {
 		/* Register exit in StationComplex. */
@@ -310,6 +385,10 @@ CommandCost CmdBuildExitSurface(DoCommandFlags flags, TileIndex tile, uint16_t s
 		node.station_id = station_id;
 		node.depth = 0;
 		sc.nodes.push_back(node);
+
+		Station *st = Station::Get(StationID(station_id));
+		st->rect.BeforeAddTile(tile, StationRect::ADD_FORCE);
+		st->RecomputeCatchment();
 	}
 
 	return CommandCost(EXPENSES_CONSTRUCTION, static_cast<Money>(1000)); /* Fixed cost for exit. */
@@ -328,8 +407,8 @@ CommandCost CmdBuildExitSurface(DoCommandFlags flags, TileIndex tile, uint16_t s
 CommandCost CmdBuildRamp(DoCommandFlags flags, TileIndex tile, RailType railtype, DiagDirection dir, int16_t from_depth, int16_t to_depth)
 {
 	if (railtype >= RAILTYPE_END) return CMD_ERROR;
-	if (from_depth >= 0 || to_depth >= 0) return CMD_ERROR;
-	if (from_depth < MAX_UNDERGROUND_DEPTH || to_depth < MAX_UNDERGROUND_DEPTH) return CMD_ERROR;
+	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!IsValidMetroZ(tile, from_depth) || !IsValidMetroZ(tile, to_depth)) return CMD_ERROR;
 	if (to_depth != from_depth - 1 && to_depth != from_depth + 1) return CMD_ERROR;
 	if (!IsValidTile(tile)) return CMD_ERROR;
 
@@ -361,4 +440,119 @@ CommandCost CmdBuildRamp(DoCommandFlags flags, TileIndex tile, RailType railtype
 	}
 
 	return CommandCost(EXPENSES_CONSTRUCTION, RailBuildCost(railtype) * UNDERGROUND_COST_MULTIPLIER * 3);
+}
+
+/**
+ * Build a PBS signal on an underground track.
+ * @param flags   Command flags.
+ * @param tile    Surface tile position.
+ * @param track   Track to place the signal on.
+ * @param depth   Underground depth.
+ * @return Cost or error.
+ */
+CommandCost CmdBuildUndergroundSignal(DoCommandFlags flags, TileIndex tile, Track track, int16_t depth)
+{
+	if (!IsValidTrack(track)) return CMD_ERROR;
+	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!IsValidMetroZ(tile, depth)) return CMD_ERROR;
+
+	SliceID sid = _multilayer_map.FindSliceAt(tile, depth);
+	if (sid == INVALID_SLICE_ID) return CMD_ERROR;
+
+	TileSlice &slice = _multilayer_map.GetSlice(sid);
+	if (slice.kind != SliceKind::Track) return CMD_ERROR;
+
+	TrackBits trackbit = TrackToTrackBits(track);
+	if (!(slice.track.tracks & trackbit)) return CMD_ERROR;
+
+	/* If signal already exists on this track — toggle (remove it). */
+	if (slice.track.signal_mask & trackbit) {
+		if (flags.Test(DoCommandFlag::Execute)) {
+			slice.track.signal_mask &= ~trackbit;
+		}
+		return CommandCost(EXPENSES_CONSTRUCTION, static_cast<Money>(0));
+	}
+
+	if (flags.Test(DoCommandFlag::Execute)) {
+		slice.track.signal_mask |= trackbit;
+		IConsolePrint(CC_DEBUG, "Underground signal placed: tile={} track={} depth={}", tile.base(), (int)track, depth);
+	}
+
+	return CommandCost(EXPENSES_CONSTRUCTION, static_cast<Money>(500));
+}
+
+/**
+ * Remove a PBS signal from an underground track.
+ * @param flags   Command flags.
+ * @param tile    Surface tile position.
+ * @param track   Track to remove the signal from.
+ * @param depth   Underground depth.
+ * @return Cost or error.
+ */
+CommandCost CmdRemoveUndergroundSignal(DoCommandFlags flags, TileIndex tile, Track track, int16_t depth)
+{
+	if (!IsValidTrack(track)) return CMD_ERROR;
+	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!IsValidMetroZ(tile, depth)) return CMD_ERROR;
+
+	SliceID sid = _multilayer_map.FindSliceAt(tile, depth);
+	if (sid == INVALID_SLICE_ID) return CMD_ERROR;
+
+	TileSlice &slice = _multilayer_map.GetSlice(sid);
+	if (slice.kind != SliceKind::Track) return CMD_ERROR;
+
+	TrackBits trackbit = TrackToTrackBits(track);
+	if (!(slice.track.signal_mask & trackbit)) return CMD_ERROR;
+
+	if (flags.Test(DoCommandFlag::Execute)) {
+		slice.track.signal_mask &= ~trackbit;
+	}
+
+	return CommandCost(EXPENSES_CONSTRUCTION, static_cast<Money>(-200));
+}
+
+/**
+ * Remove an underground station platform.
+ * @param flags Command flags.
+ * @param tile  Surface tile position.
+ * @param depth Underground depth.
+ * @return Cost or error.
+ */
+CommandCost CmdRemoveUndergroundStation(DoCommandFlags flags, TileIndex tile, int16_t depth)
+{
+	if (!IsValidTile(tile)) return CMD_ERROR;
+	if (!IsValidMetroZ(tile, depth)) return CMD_ERROR;
+
+	SliceID sid = _multilayer_map.FindSliceAt(tile, depth);
+	if (sid == INVALID_SLICE_ID) return CMD_ERROR;
+
+	TileSlice &slice = _multilayer_map.GetSlice(sid);
+	if (slice.kind != SliceKind::StationTile) return CMD_ERROR;
+
+	if (slice.owner != _current_company.base()) return CMD_ERROR;
+
+	if (flags.Test(DoCommandFlag::Execute)) {
+		uint16_t station_id = slice.station.station_id;
+
+		/* Remove from StationComplex. */
+		auto sc_it = _station_complexes.find(station_id);
+		if (sc_it != _station_complexes.end()) {
+			auto &nodes = sc_it->second.nodes;
+			std::erase_if(nodes, [&](const StationComplexNode &n) {
+				return n.ref.tile == tile && n.ref.slice == sid;
+			});
+			/* Also remove auto-created ExitSurface for this tile. */
+			std::erase_if(nodes, [&](const StationComplexNode &n) {
+				return n.ref.tile == tile && n.role == StationRole::ExitSurface && n.station_id == station_id;
+			});
+			if (nodes.empty()) {
+				RemoveStationComplex(station_id);
+			}
+		}
+
+		_multilayer_map.RemoveSliceFromColumn(tile, sid);
+		_multilayer_map.FreeSlice(sid);
+	}
+
+	return CommandCost(EXPENSES_CONSTRUCTION, static_cast<Money>(-500));
 }

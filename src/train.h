@@ -18,6 +18,7 @@
 #include "engine_base.h"
 #include "rail_map.h"
 #include "ground_vehicle.hpp"
+#include "multilayer/multilayer_map.h"
 
 struct Train;
 
@@ -112,9 +113,30 @@ struct Train final : public GroundVehicle<Train, VEH_TRAIN> {
 
 	/* Underground/metro fields. */
 	bool IsUnderground() const { return this->underground_depth != 0; }
-	int16_t underground_depth = 0;      ///< Current underground depth (0 = surface, negative = underground).
+	int16_t underground_depth = 0;      ///< Current underground absolute z level (0 means sea level, not surface).
 	uint32_t underground_slice = 0;     ///< Current SliceID when underground.
 	uint32_t underground_tile_raw = 0;  ///< TileIndex.base() of current underground tile.
+
+	/**
+	 * Get the rail type currently powering this train.
+	 * Underground trains must use the railtype stored in the active slice,
+	 * not the mirrored surface tile beneath them.
+	 */
+	inline RailType GetCurrentRailType() const
+	{
+		if (this->IsUnderground() && this->underground_slice != 0 &&
+				_multilayer_map.IsValidSlice(static_cast<SliceID>(this->underground_slice))) {
+			const TileSlice &slice = _multilayer_map.GetSlice(static_cast<SliceID>(this->underground_slice));
+			switch (slice.kind) {
+				case SliceKind::Track: return static_cast<RailType>(slice.track.railtype);
+				case SliceKind::StationTile: return static_cast<RailType>(slice.station.railtype);
+				case SliceKind::Ramp: return static_cast<RailType>(slice.ramp.railtype);
+				default: break;
+			}
+		}
+
+		return GetRailType(this->tile);
+	}
 
 	/** Create new Train object. @copydoc GroundVehicle::GroundVehicle */
 	Train(VehicleID index) : GroundVehicleBase(index) {}
@@ -198,7 +220,7 @@ struct Train final : public GroundVehicle<Train, VEH_TRAIN> {
 	 */
 	inline VehicleAccelerationModel GetAccelerationType() const
 	{
-		return GetRailTypeInfo(GetRailType(this->tile))->acceleration_type;
+		return GetRailTypeInfo(this->GetCurrentRailType())->acceleration_type;
 	}
 
 protected: // These functions should not be called outside acceleration code.
@@ -210,7 +232,7 @@ protected: // These functions should not be called outside acceleration code.
 	inline uint16_t GetPower() const
 	{
 		/* Power is not added for articulated parts */
-		if (!this->IsArticulatedPart() && HasPowerOnRail(this->railtypes, GetRailType(this->tile))) {
+		if (!this->IsArticulatedPart() && HasPowerOnRail(this->railtypes, this->GetCurrentRailType())) {
 			uint16_t power = GetVehicleProperty(this, PROP_TRAIN_POWER, RailVehInfo(this->engine_type)->power);
 			/* Halve power for multiheaded parts */
 			if (this->IsMultiheaded()) power /= 2;
@@ -227,7 +249,7 @@ protected: // These functions should not be called outside acceleration code.
 	inline uint16_t GetPoweredPartPower() const
 	{
 		/* For powered wagons the engine defines the type of engine (i.e. railtype) */
-		if (this->flags.Test(VehicleRailFlag::PoweredWagon) && HasPowerOnRail(this->railtypes, GetRailType(this->tile))) {
+		if (this->flags.Test(VehicleRailFlag::PoweredWagon) && HasPowerOnRail(this->railtypes, this->GetCurrentRailType())) {
 			return RailVehInfo(this->gcache.first_engine)->pow_wag_power;
 		}
 
@@ -334,7 +356,7 @@ protected: // These functions should not be called outside acceleration code.
 	 */
 	inline uint16_t GetMaxTrackSpeed() const
 	{
-		return GetRailTypeInfo(GetRailType(this->tile))->max_speed;
+		return GetRailTypeInfo(this->GetCurrentRailType())->max_speed;
 	}
 
 	/**

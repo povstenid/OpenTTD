@@ -83,13 +83,13 @@ struct StationComplex {
 	/** Get the minimum depth of any platform. */
 	int16_t GetDeepestLevel() const
 	{
-		int16_t deepest = 0;
+		int16_t deepest = INT16_MAX;
 		for (const auto &n : this->nodes) {
 			if (n.role == StationRole::Platform && n.depth < deepest) {
 				deepest = n.depth;
 			}
 		}
-		return deepest;
+		return deepest == INT16_MAX ? 0 : deepest;
 	}
 };
 

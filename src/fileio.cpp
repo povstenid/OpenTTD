@@ -7,6 +7,8 @@
 
 /** @file fileio.cpp Standard in/out file operations. */
 
+#include <sstream>
+
 #include "stdafx.h"
 #include "core/string_consumer.hpp"
 #include "fileio_func.h"

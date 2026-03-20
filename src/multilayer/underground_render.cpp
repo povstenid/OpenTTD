@@ -16,6 +16,8 @@
 #include "../sprite.h"
 #include "../slope_func.h"
 #include "../table/sprites.h"
+#include "../track_func.h"
+#include "../pbs.h"
 
 #include "../safeguards.h"
 
@@ -140,6 +142,30 @@ void DrawUndergroundTile(TileIndex tile)
 				if (reserved & TRACK_BIT_LEFT)  DrawGroundSpriteAt(rti->base_sprites.single_w, PALETTE_CRASH, 0, 0, z_off);
 				if (reserved & TRACK_BIT_RIGHT) DrawGroundSpriteAt(rti->base_sprites.single_e, PALETTE_CRASH, 0, 0, z_off);
 			}
+
+			/* Draw PBS signals. */
+			if (slice.track.signal_mask != 0) {
+				TileRef ref{tile, sid};
+				TrackBits signal_tracks = static_cast<TrackBits>(slice.track.signal_mask);
+				for (Track t = TRACK_BEGIN; t < TRACK_END; t++) {
+					if (!(signal_tracks & TrackToTrackBits(t))) continue;
+					/* Use PBS signal sprites. Compute state dynamically. */
+					Trackdir td = TrackToTrackdir(t);
+					SignalState state = GetUndergroundSignalState(ref, td);
+					/* SPR_SIGNALS_BASE + signal type offset + state.
+					 * PBS = type 4, 16 sprites per type, state 0=red 1=green. */
+					SpriteID signal_sprite = SPR_SIGNALS_BASE + (4 * 16) + (state == SIGNAL_STATE_GREEN ? 1 : 0);
+					/* Draw at an offset based on track direction. */
+					int x_off = 0, y_off = 0;
+					if (t == TRACK_X) { x_off = 8; y_off = 0; }
+					else if (t == TRACK_Y) { x_off = 0; y_off = 8; }
+					else if (t == TRACK_UPPER) { x_off = 8; y_off = -4; }
+					else if (t == TRACK_LOWER) { x_off = 8; y_off = 12; }
+					else if (t == TRACK_LEFT) { x_off = -4; y_off = 8; }
+					else if (t == TRACK_RIGHT) { x_off = 12; y_off = 8; }
+					DrawGroundSpriteAt(signal_sprite, PAL_NONE, x_off, y_off, z_off);
+				}
+			}
 			break;
 		}
 
@@ -152,9 +178,35 @@ void DrawUndergroundTile(TileIndex tile)
 		}
 
 		case SliceKind::StationTile: {
-			/* Station platform: blue-highlighted ground with rail. */
+			/* Station platform: blue-highlighted ground with rail in correct direction. */
 			DrawGroundSpriteAt(SPR_FLAT_BARE_LAND, PALETTE_TO_STRUCT_BLUE, 0, 0, z_off);
-			DrawGroundSpriteAt(SPR_RAIL_TRACK_X, PAL_NONE, 0, 0, z_off);
+
+			TrackBits st_tracks = static_cast<TrackBits>(slice.station.tracks);
+			RailType st_rt = static_cast<RailType>(slice.station.railtype);
+			if (st_rt < RAILTYPE_END) {
+				const RailTypeInfo *st_rti = GetRailTypeInfo(st_rt);
+				if (st_tracks & TRACK_BIT_X) DrawGroundSpriteAt(st_rti->base_sprites.single_x, PAL_NONE, 0, 0, z_off);
+				if (st_tracks & TRACK_BIT_Y) DrawGroundSpriteAt(st_rti->base_sprites.single_y, PAL_NONE, 0, 0, z_off);
+			} else {
+				/* Fallback: default rail sprite. */
+				if (st_tracks & TRACK_BIT_X) DrawGroundSpriteAt(SPR_RAIL_TRACK_X, PAL_NONE, 0, 0, z_off);
+				if (st_tracks & TRACK_BIT_Y) DrawGroundSpriteAt(SPR_RAIL_TRACK_Y, PAL_NONE, 0, 0, z_off);
+			}
+
+			/* Draw platform edge sprites (simple visual indicators). */
+			if (st_tracks & TRACK_BIT_X) {
+				DrawGroundSpriteAt(SPR_RAIL_PLATFORM_X_REAR, PALETTE_TO_STRUCT_BLUE, 0, 0, z_off);
+				DrawGroundSpriteAt(SPR_RAIL_PLATFORM_X_FRONT, PALETTE_TO_STRUCT_BLUE, 0, 0, z_off);
+			} else if (st_tracks & TRACK_BIT_Y) {
+				DrawGroundSpriteAt(SPR_RAIL_PLATFORM_Y_REAR, PALETTE_TO_STRUCT_BLUE, 0, 0, z_off);
+				DrawGroundSpriteAt(SPR_RAIL_PLATFORM_Y_FRONT, PALETTE_TO_STRUCT_BLUE, 0, 0, z_off);
+			}
+
+			/* PBS reservation overlay for station. */
+			if (slice.station.reserved != 0) {
+				if (st_tracks & TRACK_BIT_X) DrawGroundSpriteAt(SPR_RAIL_TRACK_X, PALETTE_CRASH, 0, 0, z_off);
+				if (st_tracks & TRACK_BIT_Y) DrawGroundSpriteAt(SPR_RAIL_TRACK_Y, PALETTE_CRASH, 0, 0, z_off);
+			}
 			break;
 		}
 

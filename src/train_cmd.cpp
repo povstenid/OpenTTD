@@ -39,6 +39,7 @@
 #include "timer/timer_game_economy.h"
 #include "landscape.h"
 #include "multilayer/multilayer_map.h"
+#include "multilayer/station_complex.h"
 #include "multilayer/underground_train.h"
 #include "pathfinder/yapf/yapf3d_rail.h"
 #include "pbs.h"
@@ -47,6 +48,9 @@
 #include "table/train_sprites.h"
 
 #include "safeguards.h"
+
+#include <queue>
+#include <unordered_set>
 
 /** Train destructor — also cleans up underground state. */
 Train::~Train()
@@ -61,6 +65,46 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse = true); // Also us
 static TileIndex TrainApproachingCrossingTile(const Train *v);
 static void CheckIfTrainNeedsService(Train *v);
 static void CheckNextTrainTile(Train *v);
+
+static TileIndex GetUndergroundOrderTargetTile(const Train *v)
+{
+	if (!v->current_order.IsType(OT_GOTO_STATION)) return INVALID_TILE;
+
+	auto it = _station_complexes.find(v->current_order.GetDestination().ToStationID().base());
+	if (it == _station_complexes.end()) return INVALID_TILE;
+
+	TileIndex origin = v->IsUnderground() && v->underground_tile_raw != 0 ? TileIndex(v->underground_tile_raw) : v->tile;
+	TileIndex best_tile = INVALID_TILE;
+	int best_distance = INT_MAX;
+
+	for (const StationComplexNode *platform : it->second.GetPlatforms()) {
+		if (platform == nullptr || !platform->ref.IsValid()) continue;
+
+		int distance = DistanceManhattan(origin, platform->ref.tile);
+		if (best_tile == INVALID_TILE || distance < best_distance) {
+			best_tile = platform->ref.tile;
+			best_distance = distance;
+		}
+	}
+
+	return best_tile;
+}
+
+static StationID GetOccupiedUndergroundStationToStopAt(const Train *front)
+{
+	for (const Train *part = front; part != nullptr; part = part->Next()) {
+		if (!part->IsUnderground() || part->underground_slice == 0) continue;
+		if (!_multilayer_map.IsValidSlice(static_cast<SliceID>(part->underground_slice))) continue;
+
+		const TileSlice &slice = _multilayer_map.GetSlice(static_cast<SliceID>(part->underground_slice));
+		if (slice.kind != SliceKind::StationTile) continue;
+
+		StationID station(slice.station.station_id);
+		if (front->current_order.ShouldStopAtStation(front, station)) return station;
+	}
+
+	return StationID::Invalid();
+}
 
 static const uint8_t _vehicle_initial_x_fract[4] = {10, 8, 4,  8};
 static const uint8_t _vehicle_initial_y_fract[4] = { 8, 4, 8, 10};
@@ -370,7 +414,7 @@ uint16_t Train::GetCurveSpeedLimit() const
 
 	if (max_speed != absolute_max_speed) {
 		/* Apply the current railtype's curve speed advantage */
-		const RailTypeInfo *rti = GetRailTypeInfo(GetRailType(this->tile));
+		const RailTypeInfo *rti = GetRailTypeInfo(this->GetCurrentRailType());
 		max_speed += (max_speed / 2) * rti->curve_speed;
 
 		if (this->tcache.cached_tilt) {
@@ -422,6 +466,39 @@ int Train::GetCurrentMaxSpeed() const
 		}
 	}
 
+	/* Underground station braking. */
+	if (this->IsUnderground() && this->underground_slice != 0 &&
+	    _multilayer_map.IsValidSlice(static_cast<SliceID>(this->underground_slice)) &&
+	    this->current_order.IsType(OT_GOTO_STATION)) {
+		const TileSlice &slice = _multilayer_map.GetSlice(static_cast<SliceID>(this->underground_slice));
+		if (slice.kind == SliceKind::StationTile) {
+			StationID sid(slice.station.station_id);
+			if (this->current_order.GetDestination() == sid) {
+				/* On destination station — brake to stop. */
+				max_speed = std::min(max_speed, 30);
+			}
+		} else {
+			/* Check if next tile ahead is a station tile at this depth. */
+			DiagDirection fwd = TrackdirToExitdir(TrackDirectionToTrackdir(FindFirstTrack(this->track), this->direction));
+			TileIndexDiffC diff = TileIndexDiffCByDiagDir(fwd);
+			int nx = TileX(this->tile) + diff.x;
+			int ny = TileY(this->tile) + diff.y;
+			if (nx >= 0 && ny >= 0 && nx < (int)Map::SizeX() && ny < (int)Map::SizeY()) {
+				TileIndex next = TileXY(nx, ny);
+				SliceID next_sid = _multilayer_map.FindSliceAt(next, this->underground_depth);
+				if (next_sid != INVALID_SLICE_ID) {
+					const TileSlice &ns = _multilayer_map.GetSlice(next_sid);
+					if (ns.kind == SliceKind::StationTile) {
+						StationID sid(ns.station.station_id);
+						if (this->current_order.GetDestination() == sid) {
+							max_speed = std::min(max_speed, 60);
+						}
+					}
+				}
+			}
+		}
+	}
+
 	for (const Train *u = this; u != nullptr; u = u->Next()) {
 		if (_settings_game.vehicle.train_acceleration_model == AM_REALISTIC && u->track == TRACK_BIT_DEPOT) {
 			max_speed = std::min(max_speed, 61);
@@ -431,6 +508,21 @@ int Train::GetCurrentMaxSpeed() const
 		/* Vehicle is on the middle part of a bridge. */
 		if (u->track == TRACK_BIT_WORMHOLE && !u->vehstatus.Test(VehState::Hidden)) {
 			max_speed = std::min<int>(max_speed, GetBridgeSpec(GetBridgeType(u->tile))->speed);
+		}
+	}
+
+	/* Underground speed limits. */
+	if (this->IsUnderground()) {
+		max_speed = std::min(max_speed, 200); /* 200 km/h max underground. */
+
+		/* Curve penalty: check if previous and current track differ (turning). */
+		const Train *prev_part = this->Previous();
+		if (prev_part != nullptr && prev_part->IsUnderground()) {
+			Track cur_t = FindFirstTrack(this->track);
+			Track prev_t = FindFirstTrack(prev_part->track);
+			if (IsValidTrack(cur_t) && IsValidTrack(prev_t) && cur_t != prev_t) {
+				max_speed = std::min(max_speed, 80); /* 80 km/h on curves. */
+			}
 		}
 	}
 
@@ -2143,12 +2235,17 @@ CommandCost CmdReverseTrainDirection(DoCommandFlags flags, VehicleID veh_id, boo
 		if (flags.Test(DoCommandFlag::Execute)) {
 			/* Properly leave the station if we are loading and won't be loading anymore */
 			if (v->current_order.IsType(OT_LOADING)) {
-				const Vehicle *last = v;
-				while (last->Next() != nullptr) last = last->Next();
-
-				/* not a station || different station --> leave the station */
-				if (!IsTileType(last->tile, TileType::Station) || GetStationIndex(last->tile) != GetStationIndex(v->tile)) {
+				if (v->IsUnderground()) {
+					/* Underground trains always leave station on reverse. */
 					v->LeaveStation();
+				} else {
+					const Vehicle *last = v;
+					while (last->Next() != nullptr) last = last->Next();
+
+					/* not a station || different station --> leave the station */
+					if (!IsTileType(last->tile, TileType::Station) || GetStationIndex(last->tile) != GetStationIndex(v->tile)) {
+						v->LeaveStation();
+					}
 				}
 			}
 
@@ -2266,6 +2363,9 @@ static void CheckNextTrainTile(Train *v)
 {
 	/* Don't do any look-ahead if path_backoff_interval is 255. */
 	if (_settings_game.pf.path_backoff_interval == 255) return;
+
+	/* Underground trains use separate reservation system — skip surface look-ahead. */
+	if (v->IsUnderground()) return;
 
 	/* Exit if we are inside a depot. */
 	if (v->track == TRACK_BIT_DEPOT) return;
@@ -2452,7 +2552,19 @@ void FreeTrainTrackReservation(const Train *v)
 	assert(v->IsFrontEngine());
 
 	/* Underground trains use separate reservation system. */
-	if (v->IsUnderground()) return;
+	if (v->IsUnderground()) {
+		/* Walk through all parts of the underground train and unreserve their tiles. */
+		for (const Train *u = v; u != nullptr; u = u->Next()) {
+			if (!u->IsUnderground()) continue;
+			if (u->underground_slice == 0) continue;
+			TileRef ref{TileIndex(u->underground_tile_raw), static_cast<SliceID>(u->underground_slice)};
+			Track t = FindFirstTrack(u->track);
+			if (IsValidTrack(t)) {
+				UnreserveUndergroundTrack(ref, t);
+			}
+		}
+		return;
+	}
 
 	TileIndex tile = v->tile;
 	Trackdir  td = v->GetVehicleTrackdir();
@@ -2549,6 +2661,8 @@ static Track DoTrainPathfind(const Train *v, TileIndex tile, DiagDirection enter
 			Yapf3DResult result = Yapf3DFindPath(v, tile, entry_td, target);
 
 			if (result.path_found) {
+				/* Reserve the underground path up to the first signal. */
+				Yapf3DReservePath(result);
 				path_found = true;
 				return TrackdirToTrack(result.first_trackdir);
 			}
@@ -2568,6 +2682,9 @@ static Track DoTrainPathfind(const Train *v, TileIndex tile, DiagDirection enter
  */
 static PBSTileInfo ExtendTrainReservation(const Train *v, TrackBits *new_tracks, DiagDirection *enterdir)
 {
+	/* Underground trains use YAPF3D reservation — skip surface extend. */
+	if (v->IsUnderground()) return PBSTileInfo(v->tile, v->GetVehicleTrackdir(), false);
+
 	PBSTileInfo origin = FollowTrainReservation(v);
 
 	CFollowTrackRail ft(v);
@@ -2795,6 +2912,25 @@ static Track ChooseTrainTrack(Train *v, TileIndex tile, DiagDirection enterdir, 
 	TrackBits res_tracks = (TrackBits)(GetReservedTrackbits(tile) & DiagdirReachesTracks(enterdir));
 	/* Do we have a suitable reserved track? */
 	if (res_tracks != TRACK_BIT_NONE) return FindFirstTrack(res_tracks);
+
+	/* Portal tile: run YAPF3D before surface PBS logic to reserve underground path. */
+	if (_multilayer_map.FindSliceByKind(tile, SliceKind::Portal) != INVALID_SLICE_ID) {
+		TileIndex ug_target = GetUndergroundOrderTargetTile(v);
+		if (ug_target == INVALID_TILE &&
+				(v->current_order.IsType(OT_GOTO_STATION) || v->current_order.IsType(OT_GOTO_WAYPOINT))) {
+			ug_target = v->dest_tile;
+		}
+		if (ug_target == INVALID_TILE) ug_target = tile; /* Fallback: search nearest exit. */
+		if (tracks != TRACK_BIT_NONE) {
+			Trackdir entry_td = TrackEnterdirToTrackdir(FindFirstTrack(tracks), enterdir);
+			Yapf3DResult ug_result = Yapf3DFindPath(v, tile, entry_td, ug_target);
+			if (ug_result.path_found) {
+				Yapf3DReservePath(ug_result);
+				if (got_reservation != nullptr) *got_reservation = true;
+				return FindFirstTrack(tracks);
+			}
+		}
+	}
 
 	/* Quick return in case only one possible track is available */
 	if (KillFirstBit(tracks) == TRACK_BIT_NONE) {
@@ -3053,6 +3189,72 @@ TileIndex Train::GetOrderStationLocation(StationID station)
 		return TileIndex{};
 	}
 
+	auto underground_it = _station_complexes.find(station.base());
+	if (underground_it != _station_complexes.end()) {
+		auto get_tracks = [](const TileSlice &slice) -> TrackBits {
+			if (slice.kind == SliceKind::Track) return static_cast<TrackBits>(slice.track.tracks);
+			if (slice.kind == SliceKind::StationTile) return static_cast<TrackBits>(slice.station.tracks);
+			return TRACK_BIT_NONE;
+		};
+
+		TileIndex best_portal = INVALID_TILE;
+		int best_distance = INT_MAX;
+
+		for (const StationComplexNode *platform : underground_it->second.GetPlatforms()) {
+			if (platform == nullptr || !platform->ref.IsValid()) continue;
+
+			std::queue<std::pair<TileIndex, int>> open;
+			std::unordered_set<uint32_t> visited;
+
+			open.push({platform->ref.tile, 0});
+			visited.insert(platform->ref.tile.base());
+
+			while (!open.empty()) {
+				auto [current_tile, distance] = open.front();
+				open.pop();
+
+				SliceID current_sid = _multilayer_map.FindSliceAt(current_tile, platform->depth);
+				if (current_sid == INVALID_SLICE_ID) continue;
+
+				const TileSlice &current_slice = _multilayer_map.GetSlice(current_sid);
+				TrackBits current_tracks = get_tracks(current_slice);
+				if (current_tracks == TRACK_BIT_NONE) continue;
+
+				for (DiagDirection dir = DIAGDIR_BEGIN; dir < DIAGDIR_END; dir++) {
+					TileIndexDiffC diff = TileIndexDiffCByDiagDir(dir);
+					int nx = TileX(current_tile) + diff.x;
+					int ny = TileY(current_tile) + diff.y;
+					if (nx < 0 || ny < 0 || nx >= (int)Map::SizeX() || ny >= (int)Map::SizeY()) continue;
+
+					if ((current_tracks & DiagdirReachesTracks(dir)) == TRACK_BIT_NONE) continue;
+
+					TileIndex neighbor = TileXY(nx, ny);
+					SliceID neighbor_sid = _multilayer_map.FindSliceAt(neighbor, platform->depth);
+					if (neighbor_sid == INVALID_SLICE_ID) continue;
+
+					const TileSlice &neighbor_slice = _multilayer_map.GetSlice(neighbor_sid);
+					if (neighbor_slice.kind == SliceKind::Portal) {
+						if (distance + 1 < best_distance) {
+							best_distance = distance + 1;
+							best_portal = neighbor;
+						}
+						continue;
+					}
+
+					TrackBits neighbor_tracks = get_tracks(neighbor_slice);
+					if (neighbor_tracks == TRACK_BIT_NONE) continue;
+					if ((neighbor_tracks & DiagdirReachesTracks(ReverseDiagDir(dir))) == TRACK_BIT_NONE) continue;
+
+					if (visited.insert(neighbor.base()).second) {
+						open.push({neighbor, distance + 1});
+					}
+				}
+			}
+		}
+
+		if (best_portal != INVALID_TILE) return best_portal;
+	}
+
 	return st->xy;
 }
 
@@ -3114,11 +3316,14 @@ static void TrainEnterStation(Train *v, StationID station)
 
 	v->force_proceed = TFP_NONE;
 	InvalidateWindowData(WC_VEHICLE_VIEW, v->index);
+	if (v->IsUnderground()) v->vehstatus.Reset(VehState::Stopped);
 
 	v->BeginLoading();
 
-	TriggerStationRandomisation(st, v->tile, StationRandomTrigger::VehicleArrives);
-	TriggerStationAnimation(st, v->tile, StationAnimationTrigger::VehicleArrives);
+	if (IsTileType(v->tile, TileType::Station)) {
+		TriggerStationRandomisation(st, v->tile, StationRandomTrigger::VehicleArrives);
+		TriggerStationAnimation(st, v->tile, StationAnimationTrigger::VehicleArrives);
+	}
 }
 
 /* Check if the vehicle is compatible with the specified tile */
@@ -3364,6 +3569,47 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
 		/* Check if this train part is currently underground. */
 		if (v->IsUnderground()) {
 			/* Train is underground — handle movement via multi-layer map. */
+
+			/* Re-check signal when stopped on same tile (train waiting at red). */
+			if (gp.old_tile == gp.new_tile && v->IsFrontEngine() && v->cur_speed == 0 && v->underground_slice != 0) {
+				if (StationID station = GetOccupiedUndergroundStationToStopAt(v); station != StationID::Invalid()) {
+					v->subspeed = 0;
+					TrainEnterStation(v, station);
+					goto ug_no_move;
+				}
+
+				TileRef cur_ref{gp.old_tile, static_cast<SliceID>(v->underground_slice)};
+				const TileSlice &cur_slice = _multilayer_map.GetSlice(cur_ref.slice);
+				if (cur_slice.kind == SliceKind::StationTile &&
+						v->current_order.ShouldStopAtStation(v, StationID(cur_slice.station.station_id))) {
+					v->subspeed = 0;
+					TrainEnterStation(v, StationID(cur_slice.station.station_id));
+					goto ug_no_move;
+				}
+
+				Track cur_track = FindFirstTrack(v->track);
+				Trackdir cur_td = TrackDirectionToTrackdir(cur_track, v->direction);
+				if (HasUndergroundSignalOnTrack(cur_ref, cur_track)) {
+					SignalState state = GetUndergroundSignalState(cur_ref, cur_td);
+					if (state == SIGNAL_STATE_RED) {
+						/* Still red — stay stopped. */
+						goto ug_no_move;
+					}
+					/* Signal turned green — try to reserve path ahead and resume. */
+					TileIndex target = GetUndergroundOrderTargetTile(v);
+					if (target == INVALID_TILE &&
+							(v->current_order.IsType(OT_GOTO_STATION) || v->current_order.IsType(OT_GOTO_WAYPOINT))) {
+						target = v->dest_tile;
+					}
+					{
+						Yapf3DResult new_path = Yapf3DFindPathFromRef(cur_ref, cur_td, target);
+						if (new_path.path_found) {
+							Yapf3DReservePath(new_path);
+						}
+					}
+				}
+			}
+
 			if (gp.old_tile != gp.new_tile) {
 				enterdir = DiagdirBetweenTiles(gp.old_tile, gp.new_tile);
 
@@ -3393,6 +3639,13 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
 								v->track = TrackToTrackBits(TrackToOppositeTrack(FindFirstTrack(v->track)));
 							}
 							continue;
+						}
+
+						/* Release underground reservation on old tile before exiting. */
+						if (v->underground_slice != 0) {
+							TileRef old_ref{TileIndex(v->underground_tile_raw), static_cast<SliceID>(v->underground_slice)};
+							Track old_track = FindFirstTrack(v->track);
+							if (IsValidTrack(old_track)) UnreserveUndergroundTrack(old_ref, old_track);
 						}
 
 						v->underground_depth = 0;
@@ -3448,10 +3701,37 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
 					continue;
 				}
 
+				/* Check for underground signal on the current tile before moving. */
+				if (v->IsFrontEngine() && v->underground_slice != 0) {
+					TileRef cur_ref{gp.old_tile, static_cast<SliceID>(v->underground_slice)};
+					Track cur_track = FindFirstTrack(v->track);
+					Trackdir cur_td = TrackDirectionToTrackdir(cur_track, v->direction);
+					if (HasUndergroundSignalOnTrack(cur_ref, cur_track)) {
+						SignalState state = GetUndergroundSignalState(cur_ref, cur_td);
+						if (state == SIGNAL_STATE_RED) {
+							/* Red signal — stop the train. */
+							v->cur_speed = 0;
+							v->subspeed = 0;
+							goto ug_no_move;
+						}
+					}
+				}
+
+				SliceID new_sid = _multilayer_map.FindSliceAt(gp.new_tile, v->underground_depth);
+
 				/* Choose track. */
 				TrackBits chosen_track;
 				if (prev == nullptr) {
-					chosen_track = TrackToTrackBits(FindFirstTrack(bits));
+					chosen_track = TRACK_BIT_NONE;
+
+					if (new_sid != INVALID_SLICE_ID) {
+						TileRef new_ref{gp.new_tile, new_sid};
+						chosen_track = GetUndergroundReservedTrackbits(new_ref) & bits;
+					}
+
+					if (chosen_track == TRACK_BIT_NONE) {
+						chosen_track = TrackToTrackBits(FindFirstTrack(bits));
+					}
 				} else {
 					chosen_track = prev->IsUnderground() ? prev->track : TrackToTrackBits(FindFirstTrack(bits));
 					chosen_track &= bits;
@@ -3480,7 +3760,6 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
 				v->tile = gp.new_tile;
 				v->track = chosen_track;
 
-				SliceID new_sid = _multilayer_map.FindSliceAt(gp.new_tile, v->underground_depth);
 				v->underground_slice = (new_sid != INVALID_SLICE_ID) ? new_sid : 0;
 				v->underground_tile_raw = gp.new_tile.base();
 
@@ -3492,12 +3771,32 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
 					/* Check if we entered an underground station platform. */
 					const TileSlice &new_slice = _multilayer_map.GetSlice(new_sid);
 					if (new_slice.kind == SliceKind::StationTile) {
-						/* Underground station — trigger loading if this is the destination. */
 						StationID sid_station(new_slice.station.station_id);
-						if (v->current_order.IsType(OT_GOTO_STATION) &&
-						    v->current_order.GetDestination() == sid_station) {
-							v->last_station_visited = sid_station;
-							/* Trigger station entry via order processing. */
+						if (v->current_order.ShouldStopAtStation(v, sid_station)) {
+							/* Check if next tile ahead is still this station. */
+							DiagDirection fwd = TrackdirToExitdir(TrackDirectionToTrackdir(FindFirstTrack(chosen_track), chosen_dir));
+							TileIndexDiffC fwd_diff = TileIndexDiffCByDiagDir(fwd);
+							int fx = TileX(gp.new_tile) + fwd_diff.x;
+							int fy = TileY(gp.new_tile) + fwd_diff.y;
+							bool more_platform = false;
+							if (fx >= 0 && fy >= 0 && fx < (int)Map::SizeX() && fy < (int)Map::SizeY()) {
+								TileIndex next_st = TileXY(fx, fy);
+								SliceID next_sid = _multilayer_map.FindSliceAt(next_st, v->underground_depth);
+								if (next_sid != INVALID_SLICE_ID) {
+									const TileSlice &ns = _multilayer_map.GetSlice(next_sid);
+									if (ns.kind == SliceKind::StationTile && ns.station.station_id == new_slice.station.station_id) {
+										more_platform = true;
+									}
+								}
+							}
+
+							if (!more_platform) {
+								/* End of platform — stop and enter station. */
+								v->cur_speed = 0;
+								v->subspeed = 0;
+								TrainEnterStation(v, sid_station);
+							}
+							/* else: keep moving through platform, braking handles speed. */
 						}
 					}
 				}
@@ -3508,6 +3807,7 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
 				}
 			}
 
+		ug_no_move:
 			/* Update vehicle position (train is hidden while underground).
 			 * Keep z_pos synced to surface height so exit doesn't cause z mismatch. */
 			v->x_pos = gp.x;
@@ -3518,7 +3818,6 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
 			continue;
 		}
 
-surface_movement:
 		if (v->track != TRACK_BIT_WORMHOLE) {
 			/* Not inside tunnel */
 			if (gp.old_tile == gp.new_tile) {
@@ -4202,8 +4501,12 @@ static bool TrainLocoHandler(Train *v, bool mode)
 		ReverseTrainDirection(v);
 	}
 
-	/* exit if train is stopped */
-	if (v->vehstatus.Test(VehState::Stopped) && v->cur_speed == 0) return true;
+	/* Underground station loading still needs order/loading processing even if
+	 * the consist is currently flagged as stopped. */
+	if (v->vehstatus.Test(VehState::Stopped) && v->cur_speed == 0 &&
+			!(v->IsUnderground() && v->current_order.IsType(OT_LOADING))) {
+		return true;
+	}
 
 	bool valid_order = !v->current_order.IsType(OT_NOTHING) && v->current_order.GetType() != OT_CONDITIONAL;
 	if (ProcessOrders(v) && CheckReverseTrain(v)) {

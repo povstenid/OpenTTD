@@ -60,4 +60,14 @@ bool HasEnterablePortal(TileIndex tile, DiagDirection enterdir);
  */
 TrackBits GetUndergroundTrackBits(TileIndex tile, int16_t depth, DiagDirection enterdir);
 
+/**
+ * Get the length of an underground station platform.
+ * @param tile Starting tile.
+ * @param depth Underground depth.
+ * @param station_id Station to match.
+ * @param dir Direction to walk along the platform.
+ * @return Platform length in tiles.
+ */
+int GetUndergroundPlatformLength(TileIndex tile, int16_t depth, uint16_t station_id, DiagDirection dir);
+
 #endif /* UNDERGROUND_TRAIN_H */

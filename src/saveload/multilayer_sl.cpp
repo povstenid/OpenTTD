@@ -11,6 +11,7 @@
 #include "saveload.h"
 #include "../multilayer/multilayer_map.h"
 #include "../multilayer/portal_registry.h"
+#include "../multilayer/station_complex.h"
 #include "../map_func.h"
 
 #include "../safeguards.h"
@@ -75,6 +76,9 @@ static SliceSaveData PackSlice(TileIndex tile, const TileSlice &s)
 		case SliceKind::StationTile:
 			d.payload5 = s.station.station_id;
 			d.payload0 = s.station.role;
+			d.payload1 = s.station.tracks;
+			d.payload2 = s.station.railtype;
+			d.payload3 = s.station.reserved;
 			break;
 		case SliceKind::Ramp:
 			d.payload0 = s.ramp.direction;
@@ -110,6 +114,9 @@ static TileSlice UnpackSlice(const SliceSaveData &d)
 		case SliceKind::StationTile:
 			s.station.station_id = d.payload5;
 			s.station.role = d.payload0;
+			s.station.tracks = d.payload1;
+			s.station.railtype = d.payload2;
+			s.station.reserved = d.payload3;
 			break;
 		case SliceKind::Ramp:
 			s.ramp.direction = d.payload0;
@@ -200,13 +207,68 @@ struct MLUTChunkHandler : ChunkHandler {
 	}
 };
 
+/** Flat struct for saving a StationComplexNode. */
+struct SCNodeSaveData {
+	uint32_t tile_index = 0;
+	uint32_t slice_id = 0;
+	uint16_t station_id = 0;
+	uint8_t role = 0;
+	int16_t depth = 0;
+};
+
+static const SaveLoad _scnode_save_desc[] = {
+	SLE_VAR(SCNodeSaveData, tile_index,  SLE_UINT32),
+	SLE_VAR(SCNodeSaveData, slice_id,    SLE_UINT32),
+	SLE_VAR(SCNodeSaveData, station_id,  SLE_UINT16),
+	SLE_VAR(SCNodeSaveData, role,        SLE_UINT8),
+	SLE_VAR(SCNodeSaveData, depth,       SLE_INT16),
+};
+
 struct STCXChunkHandler : ChunkHandler {
 	STCXChunkHandler() : ChunkHandler('STCX', CH_TABLE) {}
-	void Save() const override { SlTableHeader(_dummy_desc); }
-	void Load() const override {
+
+	void Save() const override
+	{
+		SlTableHeader(_scnode_save_desc);
+
+		uint idx = 0;
+		for (const auto &[sid, sc] : _station_complexes) {
+			for (const auto &node : sc.nodes) {
+				SlSetArrayIndex(idx++);
+				SCNodeSaveData d;
+				d.tile_index = node.ref.tile.base();
+				d.slice_id = node.ref.slice;
+				d.station_id = node.station_id;
+				d.role = static_cast<uint8_t>(node.role);
+				d.depth = node.depth;
+				SlObject(&d, _scnode_save_desc);
+			}
+		}
+	}
+
+	void Load() const override
+	{
 		if (IsSavegameVersionBefore(SLV_MULTILAYER_MAP)) return;
-		SlTableHeader(_dummy_desc);
-		while (SlIterateArray() != -1) { DummySL d; SlObject(&d, _dummy_desc); }
+
+		const std::vector<SaveLoad> slt = SlTableHeader(_scnode_save_desc);
+
+		_station_complexes.clear();
+
+		int index;
+		while ((index = SlIterateArray()) != -1) {
+			SCNodeSaveData d;
+			SlObject(&d, slt);
+
+			StationComplex &sc = GetOrCreateStationComplex(d.station_id);
+			sc.station_id = d.station_id;
+
+			StationComplexNode node;
+			node.ref = TileRef{TileIndex(d.tile_index), d.slice_id};
+			node.role = static_cast<StationRole>(d.role);
+			node.station_id = d.station_id;
+			node.depth = d.depth;
+			sc.nodes.push_back(node);
+		}
 	}
 };
 

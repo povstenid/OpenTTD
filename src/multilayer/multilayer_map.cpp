@@ -16,6 +16,9 @@
 /** The global multi-layer map instance. */
 MultiLayerMap _multilayer_map;
 
+/** Surface slices are logical sentinels, not physical terrain spans. */
+static constexpr ZSpan SURFACE_SLICE_SENTINEL_SPAN = {INT16_MAX, static_cast<int16_t>(INT16_MAX - 1)};
+
 /**
  * (Re)allocate the multi-layer map.
  * Creates one Surface slice per tile column, mirroring the flat map.
@@ -33,7 +36,7 @@ void MultiLayerMap::Allocate(uint map_size)
 	for (uint i = 0; i < map_size; i++) {
 		TileSlice &s = this->slice_pool[i];
 		s.kind = SliceKind::Surface;
-		s.span = {1, 0}; /* Surface: z_bot=0, z_top=1 (one unit tall). */
+		s.span = SURFACE_SLICE_SENTINEL_SPAN;
 		s.owner = 0x10;  /* OWNER_NONE — will be synced from flat map later. */
 		s.track = {};
 
@@ -52,17 +55,16 @@ void MultiLayerMap::Clear()
 
 TileSlice &MultiLayerMap::GetSurfaceSlice(TileIndex tile)
 {
-	const TileColumn &col = this->columns[tile.base()];
-	assert(!col.slices.empty());
-	/* Surface slice is always the first entry (z_bot=0, lowest underground is negative). */
-	return this->slice_pool[col.slices.back()];
+	SliceID sid = this->FindSliceByKind(tile, SliceKind::Surface);
+	assert(sid != INVALID_SLICE_ID);
+	return this->slice_pool[sid];
 }
 
 const TileSlice &MultiLayerMap::GetSurfaceSlice(TileIndex tile) const
 {
-	const TileColumn &col = this->columns[tile.base()];
-	assert(!col.slices.empty());
-	return this->slice_pool[col.slices.back()];
+	SliceID sid = this->FindSliceByKind(tile, SliceKind::Surface);
+	assert(sid != INVALID_SLICE_ID);
+	return this->slice_pool[sid];
 }
 
 /* === Slice pool CRUD === */
@@ -186,7 +188,7 @@ void MultiLayerMap::EnsureSurfaceSlices()
 		SliceID id = this->AllocateSlice();
 		TileSlice &s = this->slice_pool[id];
 		s.kind = SliceKind::Surface;
-		s.span = {1, 0};
+		s.span = SURFACE_SLICE_SENTINEL_SPAN;
 		s.owner = 0x10;
 		col.slices.push_back(id);
 	}

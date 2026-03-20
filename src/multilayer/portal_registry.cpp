@@ -40,7 +40,7 @@ void ClearPortalConnections()
 }
 
 /**
- * BFS from a portal tile through underground Track slices.
+ * BFS from a portal tile through underground rail-carrying slices.
  * Finds all reachable portal tiles and records connections.
  */
 static void BFSFromPortal(TileIndex entry_tile, SliceID portal_sid)
@@ -63,7 +63,7 @@ static void BFSFromPortal(TileIndex entry_tile, SliceID portal_sid)
 	SliceID start_sid = _multilayer_map.FindSliceAt(start_tile, depth);
 	if (start_sid == INVALID_SLICE_ID) return;
 	const TileSlice &start_slice = _multilayer_map.GetSlice(start_sid);
-	if (start_slice.kind != SliceKind::Track) return;
+	if (start_slice.kind != SliceKind::Track && start_slice.kind != SliceKind::StationTile) return;
 
 	/* BFS through underground Track slices. */
 	struct BFSNode {
@@ -98,21 +98,25 @@ static void BFSFromPortal(TileIndex entry_tile, SliceID portal_sid)
 
 			const TileSlice &nslice = _multilayer_map.GetSlice(nsid);
 
-			if (nslice.kind == SliceKind::Track) {
+			if (nslice.kind == SliceKind::Track || nslice.kind == SliceKind::StationTile) {
 				/* Check if there's a track connecting current→neighbor. */
 				SliceID cur_sid = _multilayer_map.FindSliceAt(current.tile, depth);
 				if (cur_sid == INVALID_SLICE_ID) continue;
 				const TileSlice &cur_slice = _multilayer_map.GetSlice(cur_sid);
-				if (cur_slice.kind != SliceKind::Track) continue;
+				if (cur_slice.kind != SliceKind::Track && cur_slice.kind != SliceKind::StationTile) continue;
 
 				/* Check track connectivity: current tile must have a track
 				 * that exits in direction 'dir'. */
-				TrackBits cur_tracks = static_cast<TrackBits>(cur_slice.track.tracks);
+				TrackBits cur_tracks = (cur_slice.kind == SliceKind::Track) ?
+					static_cast<TrackBits>(cur_slice.track.tracks) :
+					static_cast<TrackBits>(cur_slice.station.tracks);
 				TrackBits exit_tracks = DiagdirReachesTracks(dir);
 				if (!(cur_tracks & exit_tracks)) continue;
 
 				/* Neighbor track must be reachable from entering direction. */
-				TrackBits n_tracks = static_cast<TrackBits>(nslice.track.tracks);
+				TrackBits n_tracks = (nslice.kind == SliceKind::Track) ?
+					static_cast<TrackBits>(nslice.track.tracks) :
+					static_cast<TrackBits>(nslice.station.tracks);
 				TrackBits enter_tracks = DiagdirReachesTracks(ReverseDiagDir(dir));
 				if (!(n_tracks & enter_tracks)) continue;
 

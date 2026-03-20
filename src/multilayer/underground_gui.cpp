@@ -11,6 +11,7 @@
 #include "underground_gui.h"
 #include "underground_view.h"
 #include "underground_cmd.h"
+#include "multilayer_map.h"
 #include "../window_gui.h"
 #include "../window_func.h"
 #include "../viewport_func.h"
@@ -38,6 +39,8 @@ enum UndergroundToolbarWidgets : WidgetID {
 	WID_UG_BUILD_PORTAL,  ///< Build portal (drag direction).
 	WID_UG_BUILD_RAMP_DN, ///< Build ramp going deeper.
 	WID_UG_BUILD_RAMP_UP, ///< Build ramp going shallower.
+	WID_UG_BUILD_SIGNAL,  ///< Build PBS signal on underground track.
+	WID_UG_BUILD_STATION, ///< Build underground station platform.
 	WID_UG_REMOVE,        ///< Remove underground rail.
 	WID_UG_DEPTH_DOWN,    ///< Decrease depth.
 	WID_UG_DEPTH_DISPLAY, ///< Show current depth.
@@ -101,13 +104,21 @@ struct UndergroundToolbarWindow : Window {
 				HandlePlacePushButton(this, WID_UG_BUILD_RAMP_UP, SPR_CURSOR_NS_TRACK, HT_RAIL);
 				break;
 
+			case WID_UG_BUILD_SIGNAL:
+				HandlePlacePushButton(this, WID_UG_BUILD_SIGNAL, SPR_CURSOR_BUILDSIGNALS_FIRST, HT_RECT);
+				break;
+
+			case WID_UG_BUILD_STATION:
+				HandlePlacePushButton(this, WID_UG_BUILD_STATION, SPR_CURSOR_NS_TRACK, HT_RAIL);
+				break;
+
 			case WID_UG_REMOVE:
 				HandlePlacePushButton(this, WID_UG_REMOVE, ANIMCURSOR_DEMOLISH, HT_RECT);
 				break;
 
 			case WID_UG_DEPTH_DOWN: {
 				int16_t depth = GetUndergroundViewDepth();
-				if (depth > -10) {
+				if (depth > GetMetroGlobalMinZ()) {
 					SetUndergroundViewDepth(depth - 1);
 					MarkWholeScreenDirty();
 					this->SetDirty();
@@ -117,7 +128,7 @@ struct UndergroundToolbarWindow : Window {
 
 			case WID_UG_DEPTH_UP: {
 				int16_t depth = GetUndergroundViewDepth();
-				if (depth < -1) {
+				if (depth < GetMetroGlobalMaxZ()) {
 					SetUndergroundViewDepth(depth + 1);
 					MarkWholeScreenDirty();
 					this->SetDirty();
@@ -135,6 +146,26 @@ struct UndergroundToolbarWindow : Window {
 
 	void OnPlaceObject([[maybe_unused]] Point pt, TileIndex tile) override
 	{
+		int16_t depth = GetUndergroundViewDepth();
+
+		if (this->IsWidgetLowered(WID_UG_BUILD_SIGNAL)) {
+			/* Place signal on the first track found at this depth. */
+			SliceID sid = _multilayer_map.FindSliceAt(tile, depth);
+			if (sid != INVALID_SLICE_ID) {
+				const TileSlice &slice = _multilayer_map.GetSlice(sid);
+				if (slice.kind == SliceKind::Track) {
+					Track t = FindFirstTrack(static_cast<TrackBits>(slice.track.tracks));
+					Command<Commands::BuildUndergroundSignal>::Post(tile, t, depth);
+				}
+			}
+			return;
+		}
+
+		if (this->IsWidgetLowered(WID_UG_BUILD_STATION)) {
+			VpStartPlaceSizing(tile, VPM_RAILDIRS, DDSP_PLACE_RAIL);
+			return;
+		}
+
 		if (this->IsWidgetLowered(WID_UG_BUILD_RAIL) ||
 		    this->IsWidgetLowered(WID_UG_BUILD_PORTAL) ||
 		    this->IsWidgetLowered(WID_UG_BUILD_RAMP_DN) ||
@@ -197,6 +228,41 @@ struct UndergroundToolbarWindow : Window {
 			Command<Commands::RemoveUndergroundRail>::Post(STR_ERROR_CAN_T_REMOVE_UNDERGROUND_RAIL,
 				start_tile, track, depth);
 		}
+
+		/* Station drag: build platform tiles from start to end. */
+		if (this->IsWidgetLowered(WID_UG_BUILD_STATION) && select_proc == DDSP_PLACE_RAIL) {
+			Axis axis = (track == TRACK_Y || track == TRACK_LEFT || track == TRACK_RIGHT) ? AXIS_Y : AXIS_X;
+
+			/* Use Do (synchronous) for first tile to get station_id, then Post for rest. */
+			uint16_t station_id = 0;
+
+			int sx = TileX(start_tile), sy = TileY(start_tile);
+			int ex = TileX(end_tile), ey = TileY(end_tile);
+
+			/* Build tiles along axis. First tile creates the station. */
+			auto build_tile = [&](TileIndex t) {
+				auto result = Command<Commands::BuildUndergroundStation>::Do(
+					DoCommandFlags{DoCommandFlag::Execute}, t, this->railtype, depth, station_id, axis);
+				if (result.Succeeded() && station_id == 0) {
+					/* Find the station that was just created at this tile. */
+					SliceID sid = _multilayer_map.FindSliceAt(t, depth);
+					if (sid != INVALID_SLICE_ID) {
+						const TileSlice &s = _multilayer_map.GetSlice(sid);
+						if (s.kind == SliceKind::StationTile) {
+							station_id = s.station.station_id;
+						}
+					}
+				}
+			};
+
+			if (axis == AXIS_X) {
+				if (ex < sx) std::swap(sx, ex);
+				for (int x = sx; x <= ex; x++) build_tile(TileXY(x, sy));
+			} else {
+				if (ey < sy) std::swap(sy, ey);
+				for (int y = sy; y <= ey; y++) build_tile(TileXY(sx, y));
+			}
+		}
 	}
 
 	void OnPlaceObjectAbort() override
@@ -208,7 +274,9 @@ struct UndergroundToolbarWindow : Window {
 		[[maybe_unused]] Dimension &fill, [[maybe_unused]] Dimension &resize) override
 	{
 		if (widget == WID_UG_DEPTH_DISPLAY) {
-			size.width = GetStringBoundingBox(GetString(STR_JUST_INT, -10)).width + padding.width;
+			uint min_width = GetStringBoundingBox(GetString(STR_JUST_INT, GetMetroGlobalMinZ())).width;
+			uint max_width = GetStringBoundingBox(GetString(STR_JUST_INT, GetMetroGlobalMaxZ())).width;
+			size.width = std::max(min_width, max_width) + padding.width;
 		}
 	}
 
@@ -232,7 +300,7 @@ struct UndergroundToolbarWindow : Window {
 };
 
 /** Widget definition for the underground toolbar. */
-static constexpr NWidgetPart _nested_underground_toolbar_widgets[] = {
+static constexpr std::initializer_list<NWidgetPart> _nested_underground_toolbar_widgets = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
 		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN), SetStringTip(STR_UNDERGROUND_TOOLBAR_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
@@ -249,6 +317,10 @@ static constexpr NWidgetPart _nested_underground_toolbar_widgets[] = {
 			SetSpriteTip(SPR_ARROW_DOWN, STR_RAIL_TOOLBAR_TOOLTIP_BUILD_RAILROAD_TUNNEL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_UG_BUILD_RAMP_UP), SetMinimalSize(22, 22),
 			SetSpriteTip(SPR_ARROW_UP, STR_RAIL_TOOLBAR_TOOLTIP_BUILD_RAILROAD_TUNNEL),
+		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_UG_BUILD_SIGNAL), SetMinimalSize(22, 22),
+			SetSpriteTip(SPR_IMG_SIGNAL_ELECTRIC_PBS, STR_RAIL_TOOLBAR_TOOLTIP_BUILD_RAILROAD_SIGNALS),
+		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_UG_BUILD_STATION), SetMinimalSize(22, 22),
+			SetSpriteTip(SPR_IMG_RAIL_STATION, STR_RAIL_TOOLBAR_TOOLTIP_BUILD_RAILROAD_STATION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_UG_REMOVE), SetMinimalSize(22, 22),
 			SetSpriteTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
 

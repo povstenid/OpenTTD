@@ -1,0 +1,166 @@
+{
+    "crash": {
+        "id": 6,
+        "reason": "Aborted"
+    },
+    "date": "2026-03-19 17:11:13 (UTC)",
+    "game": {
+        "companies": {
+            "0": {
+                "infrastructure": {
+                    "airport": 0,
+                    "rail": 51,
+                    "road": 0,
+                    "signal": 0,
+                    "station": 2,
+                    "tram": 0,
+                    "water": 0
+                },
+                "type": "human",
+                "vehicles": {
+                    "aircraft": 0,
+                    "roadveh": 0,
+                    "ship": 0,
+                    "train": 1
+                }
+            }
+        },
+        "current_company": 16,
+        "game_script": null,
+        "gamelog": [
+            "---- gamelog start ----",
+            "Tick 0: new game started",
+            "Revision text changed to m6a8e196356c37d5eda1e8007bc008978fec9e848, savegame version 365, modified, _openttd_newgrf_version = 0x20006d64",
+            "New game mode: 1 landscape: 0",
+            "---- gamelog end ----"
+        ],
+        "grfs": null,
+        "local_company": 0,
+        "news": [
+            "(1980-07-05) String: Citizens celebrate . . .\nFirst train arrives at Metro Underground B!, Type: 0, Ref1: 2, 0, Ref2: 3, 1"
+        ],
+        "settings_changed": {
+            "construction.map_height_limit": "30",
+            "construction.max_underground_depth": "8",
+            "difficulty.competitors_interval": "0",
+            "difficulty.industry_density": "0",
+            "difficulty.max_loan": "2000000000",
+            "difficulty.number_towns": "0",
+            "difficulty.terrain_type": "0",
+            "difficulty.vehicle_breakdowns": "0",
+            "game_creation.generation_seed": "510009",
+            "game_creation.starting_year": "1980",
+            "game_creation.tgen_smoothness": "0",
+            "game_creation.tree_placer": "0",
+            "game_creation.water_borders": "0",
+            "gui.autosave_interval": "0",
+            "language": "english.lng",
+            "linkgraph.recalc_interval": "16",
+            "linkgraph.recalc_time": "64",
+            "music.custom_1": "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
+            "music.custom_2": "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
+            "resolution": "640,480"
+        },
+        "timers": {
+            "calendar": "1980-07-05 (4)",
+            "economy": "1980-07-05 (4)",
+            "ticks": 15048
+        }
+    },
+    "info": {
+        "compiler": {
+            "extra": "11.4.0",
+            "name": "GCC",
+            "version": "11.4.0"
+        },
+        "configuration": {
+            "blitter": "null",
+            "graphics_set": "OpenGFX.7938",
+            "graphics_set_parameters": [],
+            "language": {
+                "filename": "english.lng",
+                "isocode": "en_GB",
+                "name": "English (UK)"
+            },
+            "music_driver": "null",
+            "music_set": "NoMusic.0",
+            "network": "no",
+            "sound_driver": "null",
+            "sound_set": "NoSound.2",
+            "video_driver": "null",
+            "video_info": "null"
+        },
+        "font": {
+            "large": "sprite",
+            "medium": "sprite",
+            "mono": "sprite",
+            "small": "sprite"
+        },
+        "libraries": {
+            "lzma": "5.2.5",
+            "png": "1.6.37",
+            "zlib": "1.2.11"
+        },
+        "openttd": {
+            "bits": 64,
+            "build_date": "Mar 19 2026 16:22:55",
+            "dedicated_build": "yes",
+            "endian": "little",
+            "version": {
+                "content": "16.0",
+                "hash": "6a8e196356c37d5eda1e8007bc008978fec9e848",
+                "modified": 2,
+                "newgrf": "20006D64",
+                "revision": "20260318-master-m6a8e196356",
+                "tagged": 0
+            }
+        },
+        "os": {
+            "hardware_concurrency": 32,
+            "machine": "x86_64",
+            "memory": "16 GiB",
+            "os": "Linux",
+            "release": "6.6.87.2-microsoft-standard-WSL2",
+            "version": "#1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025"
+        },
+        "plugins": null
+    },
+    "schema": 1,
+    "session": {
+        "id": "6B9666214935550A733E1AE9D5AFFE5D",
+        "savegame_size": 24128,
+        "seconds": 0
+    },
+    "stacktrace": [
+        "/tmp/openttd-metro-fresh/openttd(_ZNK12CrashLogUnix16SurveyStacktraceERN8nlohmann16json_abi_v3_11_310basic_jsonISt3mapSt6vectorNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEblmdSaNS1_14adl_serializerES4_IhSaIhEEvEE+0x45) [0x5934d4666731]",
+        "/tmp/openttd-metro-fresh/openttd(+0x1b4bdc3) [0x5934d492cdc3]",
+        "/tmp/openttd-metro-fresh/openttd(+0x1b52f6e) [0x5934d4933f6e]",
+        "/tmp/openttd-metro-fresh/openttd(+0x1b511dc) [0x5934d49321dc]",
+        "/tmp/openttd-metro-fresh/openttd(+0x1b4f95b) [0x5934d493095b]",
+        "/tmp/openttd-metro-fresh/openttd(_ZNKSt8functionIFbvEEclEv+0x36) [0x5934d4666d6a]",
+        "/tmp/openttd-metro-fresh/openttd(_ZN12CrashLogUnix10TryExecuteESt17basic_string_viewIcSt11char_traitsIcEEOSt8functionIFbvEE+0x173) [0x5934d46669e5]",
+        "/tmp/openttd-metro-fresh/openttd(_ZN8CrashLog12FillCrashLogEv+0x276) [0x5934d492d35e]",
+        "/tmp/openttd-metro-fresh/openttd(_ZN8CrashLog12MakeCrashLogEv+0x7a) [0x5934d492f2d4]",
+        "/tmp/openttd-metro-fresh/openttd(+0x1885278) [0x5934d4666278]",
+        "/lib/x86_64-linux-gnu/libc.so.6(+0x42520) [0x7344ec442520]",
+        "/lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x12c) [0x7344ec4969fc]",
+        "/lib/x86_64-linux-gnu/libc.so.6(raise+0x16) [0x7344ec442476]",
+        "/lib/x86_64-linux-gnu/libc.so.6(abort+0xd3) [0x7344ec4287f3]",
+        "/lib/x86_64-linux-gnu/libc.so.6(+0x2871b) [0x7344ec42871b]",
+        "/lib/x86_64-linux-gnu/libc.so.6(+0x39e96) [0x7344ec439e96]",
+        "/tmp/openttd-metro-fresh/openttd(_ZN7Vehicle12BeginLoadingEv+0x11b) [0x5934d4f23c29]",
+        "/tmp/openttd-metro-fresh/openttd(+0x2115d1a) [0x5934d4ef6d1a]",
+        "/tmp/openttd-metro-fresh/openttd(_Z15TrainControllerP5TrainP7Vehicleb+0x1160) [0x5934d4ef917c]",
+        "/tmp/openttd-metro-fresh/openttd(+0x211c07b) [0x5934d4efd07b]",
+        "/tmp/openttd-metro-fresh/openttd(_ZN5Train4TickEv+0x158) [0x5934d4efd5fc]",
+        "/tmp/openttd-metro-fresh/openttd(_Z16CallVehicleTicksv+0x1b6) [0x5934d4f1f256]",
+        "/tmp/openttd-metro-fresh/openttd(_Z13StateGameLoopv+0x274) [0x5934d4bfdc00]",
+        "/tmp/openttd-metro-fresh/openttd(_Z8GameLoopv+0x284) [0x5934d4bfe234]",
+        "/tmp/openttd-metro-fresh/openttd(_ZN16VideoDriver_Null8MainLoopEv+0x1e) [0x5934d4845a4c]",
+        "/tmp/openttd-metro-fresh/openttd(_Z12openttd_mainSt4spanISt17basic_string_viewIcSt11char_traitsIcEELm18446744073709551615EE+0x1c6a) [0x5934d4bfc0ba]",
+        "/tmp/openttd-metro-fresh/openttd(main+0xe8) [0x5934d4026b61]",
+        "/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7344ec429d90]",
+        "/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7344ec429e40]",
+        "/tmp/openttd-metro-fresh/openttd(_start+0x25) [0x5934d40269b5]"
+    ]
+}

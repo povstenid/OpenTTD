@@ -74,6 +74,9 @@ struct TrackPayload {
 struct StationPayload {
 	uint16_t station_id = 0; ///< Index into Station pool.
 	uint8_t role = 0;        ///< 0 = Platform, 1 = ExitSurface.
+	uint8_t tracks = 0;      ///< TrackBits for platform direction (X or Y).
+	uint8_t railtype = 0xFF; ///< RailType value (0xFF = INVALID_RAILTYPE).
+	uint8_t reserved = 0;    ///< PBS reservation state.
 };
 
 /**

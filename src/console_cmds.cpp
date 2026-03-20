@@ -7,6 +7,8 @@
 
 /** @file console_cmds.cpp Implementation of the console hooks. */
 
+#include <sstream>
+
 #include "stdafx.h"
 #include "core/string_consumer.hpp"
 #include "console_internal.h"
@@ -49,6 +51,10 @@
 #include "multilayer/underground_view.h"
 #include "multilayer/underground_cmd.h"
 #include "multilayer/multilayer_map.h"
+#include "order_base.h"
+#include "order_cmd.h"
+#include "station_base.h"
+#include "train.h"
 
 #if defined(WITH_ZLIB)
 #include "network/network_content.h"
@@ -2970,9 +2976,13 @@ static bool ConUnderground([[maybe_unused]] std::span<std::string_view> argv)
 		IConsolePrint(CC_HELP, "Underground metro commands:");
 		IConsolePrint(CC_HELP, "  'underground toolbar' - Open underground construction toolbar");
 		IConsolePrint(CC_HELP, "  'underground view'    - Toggle underground view");
-		IConsolePrint(CC_HELP, "  'underground build <x> <y> [depth]' - Build underground rail at tile");
-		IConsolePrint(CC_HELP, "  'underground portal <x> <y> <dir> [depth]' - Build portal (dir: 0-3)");
+		IConsolePrint(CC_HELP, "  'underground build <x> <y> [z]' - Build underground rail at absolute z");
+		IConsolePrint(CC_HELP, "  'underground portal <x> <y> <dir> [z]' - Build portal (dir: 0-3) at absolute z");
 		IConsolePrint(CC_HELP, "  'underground info <x> <y>' - Show underground info for tile");
+		IConsolePrint(CC_HELP, "  'underground signal <x> <y> [z] [track]' - Place PBS signal (track: 0-5)");
+		IConsolePrint(CC_HELP, "  'underground station <x> <y> [z] [station_id] [x|y]' - Build station platform");
+		IConsolePrint(CC_HELP, "  'underground remove_station <x> <y> [z]' - Remove station platform");
+		IConsolePrint(CC_HELP, "  'underground order <vehicle_id> <station_id>' - Add go-to-station order");
 		return true;
 	}
 
@@ -3061,16 +3071,24 @@ static bool ConUnderground([[maybe_unused]] std::span<std::string_view> argv)
 				case SliceKind::End: kind_str = "Free"; break;
 			}
 			IConsolePrint(CC_DEFAULT, "  [{}] {} z=[{},{}] owner={}", sid, kind_str, s.span.z_bot, s.span.z_top, s.owner);
+			if (s.kind == SliceKind::Track) {
+				IConsolePrint(CC_DEFAULT, "      tracks=0x{:02X} signals=0x{:02X} reserved=0x{:02X} rt={}", s.track.tracks, s.track.signal_mask, s.track.reserved, s.track.railtype);
+			} else if (s.kind == SliceKind::StationTile) {
+				IConsolePrint(CC_DEFAULT, "      station_id={} role={} tracks=0x{:02X} reserved=0x{:02X} rt={}", s.station.station_id, s.station.role, s.station.tracks, s.station.reserved, s.station.railtype);
+			}
 		}
 		return true;
 	}
 
 	if (StrEqualsIgnoreCase(argv[1], "depth") && argv.size() >= 3) {
 		auto d = ParseInteger<int>(argv[2], 0);
-		if (!d || *d >= 0 || *d < -10) { IConsolePrint(CC_ERROR, "Depth must be -1 to -10."); return true; }
+		if (!d || *d < GetMetroGlobalMinZ() || *d > GetMetroGlobalMaxZ()) {
+			IConsolePrint(CC_ERROR, "Z must be between {} and {}.", GetMetroGlobalMinZ(), GetMetroGlobalMaxZ());
+			return true;
+		}
 		SetUndergroundViewDepth(static_cast<int16_t>(*d));
 		MarkWholeScreenDirty();
-		IConsolePrint(CC_DEFAULT, "Underground view depth set to {}", *d);
+		IConsolePrint(CC_DEFAULT, "Underground view z set to {}", *d);
 		return true;
 	}
 
@@ -3082,9 +3100,78 @@ static bool ConUnderground([[maybe_unused]] std::span<std::string_view> argv)
 		if (argv.size() >= 5) { auto d = ParseInteger<int>(argv[4], 0); if (d) depth = static_cast<int16_t>(*d); }
 		uint16_t station_id = 0;
 		if (argv.size() >= 6) { auto s = ParseInteger<uint16_t>(argv[5], 0); if (s) station_id = *s; }
+		Axis axis = AXIS_X;
+		if (argv.size() >= 7 && StrEqualsIgnoreCase(argv[6], "y")) axis = AXIS_Y;
 		TileIndex tile = TileXY(*x, *y);
-		auto result = Command<Commands::BuildUndergroundStation>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, RAILTYPE_RAIL, depth, station_id);
-		IConsolePrint(result.Succeeded() ? CC_DEFAULT : CC_ERROR, result.Succeeded() ? "Station platform built!" : "Failed.");
+		auto result = Command<Commands::BuildUndergroundStation>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, RAILTYPE_RAIL, depth, station_id, axis);
+		if (result.Succeeded()) {
+			IConsolePrint(CC_DEFAULT, "Station platform built! (axis={})", axis == AXIS_X ? "X" : "Y");
+		} else {
+			IConsolePrint(CC_ERROR, "Station build failed.");
+		}
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "signal") && argv.size() >= 4) {
+		auto x = ParseInteger<uint>(argv[2], 0);
+		auto y = ParseInteger<uint>(argv[3], 0);
+		if (!x || !y) { IConsolePrint(CC_ERROR, "Invalid coordinates."); return true; }
+		int16_t depth = -1;
+		if (argv.size() >= 5) { auto d = ParseInteger<int>(argv[4], 0); if (d) depth = static_cast<int16_t>(*d); }
+		Track track = TRACK_X;
+		if (argv.size() >= 6) {
+			auto t = ParseInteger<int>(argv[5], 0);
+			if (t && *t >= 0 && *t < 6) track = static_cast<Track>(*t);
+		}
+		TileIndex tile = TileXY(*x, *y);
+		auto test = Command<Commands::BuildUndergroundSignal>::Do({}, tile, track, depth);
+		if (!test.Succeeded()) {
+			IConsolePrint(CC_ERROR, "Signal test failed (no track at depth?).");
+			return true;
+		}
+		auto result = Command<Commands::BuildUndergroundSignal>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, track, depth);
+		IConsolePrint(result.Succeeded() ? CC_DEFAULT : CC_ERROR, result.Succeeded() ? "Underground signal placed!" : "Signal execute failed.");
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "order") && argv.size() >= 4) {
+		auto vid = ParseInteger<uint32_t>(argv[2], 0);
+		auto sid = ParseInteger<uint32_t>(argv[3], 0);
+		if (!vid || !sid) { IConsolePrint(CC_ERROR, "Usage: underground order <vehicle_id> <station_id>"); return true; }
+		Train *tr = Train::GetIfValid(VehicleID(*vid));
+		if (tr == nullptr || !tr->IsFrontEngine()) {
+			IConsolePrint(CC_ERROR, "Vehicle {} not found or not a front engine.", *vid);
+			return true;
+		}
+		StationID dest_sid(static_cast<uint16_t>(*sid));
+		if (!Station::IsValidID(dest_sid)) {
+			IConsolePrint(CC_ERROR, "Station {} not found.", *sid);
+			return true;
+		}
+		Order order;
+		order.MakeGoToStation(dest_sid);
+		auto result = Command<Commands::InsertOrder>::Do(
+			DoCommandFlags{DoCommandFlag::Execute},
+			tr->index,
+			VehicleOrderID(tr->GetNumOrders()),
+			order);
+		if (result.Succeeded()) {
+			IConsolePrint(CC_DEFAULT, "Added order: go to station {} for train {}", *sid, *vid);
+		} else {
+			IConsolePrint(CC_ERROR, "Failed to add order.");
+		}
+		return true;
+	}
+
+	if (StrEqualsIgnoreCase(argv[1], "remove_station") && argv.size() >= 4) {
+		auto x = ParseInteger<uint>(argv[2], 0);
+		auto y = ParseInteger<uint>(argv[3], 0);
+		if (!x || !y) { IConsolePrint(CC_ERROR, "Invalid coordinates."); return true; }
+		int16_t depth = -1;
+		if (argv.size() >= 5) { auto d = ParseInteger<int>(argv[4], 0); if (d) depth = static_cast<int16_t>(*d); }
+		TileIndex tile = TileXY(*x, *y);
+		auto result = Command<Commands::RemoveUndergroundStation>::Do(DoCommandFlags{DoCommandFlag::Execute}, tile, depth);
+		IConsolePrint(result.Succeeded() ? CC_DEFAULT : CC_ERROR, result.Succeeded() ? "Station removed!" : "Remove failed.");
 		return true;
 	}
 
